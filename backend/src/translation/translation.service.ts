@@ -25,8 +25,8 @@ interface BatchResult {
   warning?: string;
 }
 
-const BATCH_SIZE = 40;
-const OVERLAP_SIZE = 5;
+const BATCH_SIZE = 60;
+const OVERLAP_SIZE = 2;
 const EXHAUSTION_FAILURE_LIMIT = 3;
 
 @Injectable()
@@ -35,6 +35,24 @@ export class TranslationService {
   private consecutiveOpenRouterFailures = 0;
 
   constructor() {}
+
+  private async runWithConcurrency<T>(tasks: (() => Promise<T>)[], concurrency: number): Promise<T[]> {
+    const results: T[] = new Array(tasks.length);
+    let i = 0;
+
+    const worker = async () => {
+      while (i < tasks.length) {
+        const index = i++;
+        results[index] = await tasks[index]();
+      }
+    };
+
+    await Promise.all(
+      Array(Math.min(concurrency, tasks.length)).fill(0).map(() => worker())
+    );
+
+    return results;
+  }
 
   async translateLines(
     lines: string[],
@@ -61,33 +79,46 @@ export class TranslationService {
     const totalBatches = Math.ceil(lines.length / (BATCH_SIZE - OVERLAP_SIZE));
     let batchIndex = 0;
 
+    const tasks = [];
+
     for (
       let start = 0;
       start < lines.length;
       start += BATCH_SIZE - OVERLAP_SIZE
     ) {
-      batchIndex++;
+      const currentBatchIndex = ++batchIndex;
       const end = Math.min(start + BATCH_SIZE, lines.length);
       const slice = lines.slice(start, end);
 
-      if (options?.onProgress) {
-        options.onProgress({
-          batchIndex,
-          totalBatches,
-          progressPercent: Math.floor((batchIndex / totalBatches) * 100),
-          message: `Translating batch ${batchIndex} of ${totalBatches} (${slice.length} lines)`,
-          details: { start, end, lines: slice.length },
-        });
-      }
+      tasks.push(async () => {
+        if (options?.onProgress) {
+          options.onProgress({
+            batchIndex: currentBatchIndex,
+            totalBatches,
+            progressPercent: Math.floor((currentBatchIndex / totalBatches) * 100),
+            message: `Translating batch ${currentBatchIndex} of ${totalBatches} (${slice.length} lines)`,
+            details: { start, end, lines: slice.length },
+          });
+        }
 
-      const result = await this.translateBatch(
-        slice,
-        start,
-        targetLanguage,
-        openRouterApiKey,
-        deepSeekApiKey,
-        options?.provider
-      );
+        const result = await this.translateBatch(
+          slice,
+          start,
+          targetLanguage,
+          openRouterApiKey,
+          deepSeekApiKey,
+          options?.provider
+        );
+
+        return { start, result };
+      });
+    }
+
+    // Process tasks with controlled concurrency (e.g., 5 concurrent requests)
+    const concurrency = options?.provider === 'openrouter' ? 3 : 5;
+    const results = await this.runWithConcurrency(tasks, concurrency);
+
+    for (const { start, result } of results) {
       const effectiveStart = start === 0 ? 0 : OVERLAP_SIZE;
       const toApply = result.translated.slice(effectiveStart);
 
@@ -201,10 +232,11 @@ export class TranslationService {
       const response = await client.chat.send({
         chatGenerationParams: {
           model: 'openrouter/free',
+          responseFormat: { type: 'json_object' },
           messages: [
             {
               role: 'system',
-              content: `Translate the following JSON array of subtitle lines to ${targetLanguage}. Return only a valid JSON array with the same number of elements. Preserve tone, names, and formatting.`,
+              content: `Translate to ${targetLanguage}. Output strictly JSON object: {"data":["translated1",...]}. Keep exact array length.`,
             },
             {
               role: 'user',
@@ -241,16 +273,18 @@ export class TranslationService {
     apiKey: string,
   ): Promise<BatchResult> {
     const client = new OpenAI({
-      apiKey,
       baseURL: 'https://api.deepseek.com',
+      apiKey: apiKey.trim(),
     });
 
     const response = (await client.chat.completions.create({
       model: 'deepseek-chat',
+      temperature: 1.3,
+      response_format: { type: 'json_object' },
       messages: [
         {
           role: 'system',
-          content: `Translate the following JSON array of subtitle lines to ${targetLanguage}. Return only a valid JSON array with the same number of elements. Preserve tone, names, and formatting.`,
+          content: `Translate to ${targetLanguage}. Output strictly JSON object: {"data":["translated1",...]}. Keep exact array length.`,
         },
         {
           role: 'user',
@@ -284,7 +318,12 @@ export class TranslationService {
       parsed = null;
     }
 
-    if (!Array.isArray(parsed)) {
+    let arrayData = parsed;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      arrayData = (parsed as any).data || (parsed as any).translations || Object.values(parsed)[0];
+    }
+
+    if (!Array.isArray(arrayData)) {
       return {
         translated: [...input],
         usage,
@@ -292,8 +331,8 @@ export class TranslationService {
       };
     }
 
-    const translated = parsed.map((entry) =>
-      typeof entry === 'string' ? entry : '',
+    const translated = arrayData.map((entry) =>
+      typeof entry === 'string' ? entry : JSON.stringify(entry),
     );
 
     if (!this.isValidBatchLength(input, translated)) {

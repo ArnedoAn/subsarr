@@ -249,12 +249,12 @@ export default function JobsPage() {
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-2">
-                        {job.state === 'waiting' ? (
+                        {job.state === 'waiting' || job.state === 'failed' ? (
                           <button
                             onClick={() => void cancel(job.id)}
                             className="bg-error/10 text-error border border-error/30 px-3 py-1.5 rounded text-[10px] font-bold tracking-widest hover:bg-error/20 transition-colors"
                           >
-                            CANCEL
+                            {job.state === 'failed' ? 'DELETE' : 'CANCEL'}
                           </button>
                         ) : null}
                         {job.state === 'failed' ? (

@@ -281,6 +281,11 @@ export default function LibraryPage() {
               const statusLabel = hasSource ? status : 'No source track';
               const isSelected = Boolean(selected[item.id]);
 
+              const target = targetLanguageFilter.toLowerCase();
+              const hasTargetEmbedded = item.subtitleTracks.some((track) => track.language === target);
+              const hasTargetExternal = item.externalSubtitles.some((subtitle) => subtitle.language === target);
+              const hasTargetLanguage = hasTargetEmbedded || hasTargetExternal;
+
               return (
                 <tr
                   key={item.id}
@@ -297,8 +302,33 @@ export default function LibraryPage() {
                     />
                   </td>
                   <td className="px-6 py-4 align-top">
-                    <p className="font-medium text-on-surface">{item.name}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="font-medium text-on-surface">{item.name}</p>
+                      {hasTargetLanguage && (
+                        <span 
+                          className="bg-primary/20 text-primary px-2 py-0.5 rounded text-[10px] font-bold tracking-widest flex items-center gap-1"
+                          title={`Already has ${target.toUpperCase()} subtitles`}
+                        >
+                          <span className="material-symbols-outlined text-[12px]">done_all</span>
+                          {target.toUpperCase()}
+                        </span>
+                      )}
+                    </div>
                     <p className="mt-1 text-xs font-mono text-on-surface-variant">{item.path}</p>
+                    
+                    {item.externalSubtitles.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {item.externalSubtitles.map((sub, idx) => (
+                          <span
+                            key={`ext-${item.id}-${idx}`}
+                            className="bg-surface-variant/50 text-on-surface-variant border border-on-surface-variant/20 px-2 py-1 rounded text-[10px] font-mono flex items-center gap-1"
+                          >
+                            <span className="material-symbols-outlined text-[12px]">description</span>
+                            {sub.language.toUpperCase()} {sub.forced ? '(Forced)' : ''}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </td>
                   <td className="px-6 py-4 align-top">
                     <div className="flex flex-wrap gap-2">

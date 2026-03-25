@@ -236,9 +236,9 @@ export class JobsService {
     }
 
     const state = await job.getState();
-    if (state !== 'waiting' && state !== 'delayed') {
+    if (state !== 'waiting' && state !== 'delayed' && state !== 'failed') {
       throw new Error(
-        `Only queued jobs can be canceled. Current state: ${state}`,
+        `Only queued or failed jobs can be canceled. Current state: ${state}`,
       );
     }
 
