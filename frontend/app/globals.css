@@ -1,0 +1,267 @@
+@import 'tailwindcss';
+
+/* ================================================
+   SUBSYNC Design System: "The Tactical Chronograph"
+   Extracted from Stitch mockups
+   ================================================ */
+
+:root {
+  /* === Core Surfaces === */
+  --background: #0e1323;
+  --surface: #0e1323;
+  --surface-dim: #0e1323;
+  --surface-bright: #34394a;
+  --surface-container-lowest: #080d1d;
+  --surface-container-low: #161b2b;
+  --surface-container: #1a1f30;
+  --surface-container-high: #25293a;
+  --surface-container-highest: #2f3446;
+  --surface-variant: #2f3446;
+  --surface-tint: #2fd9f4;
+
+  /* === Primary (Cyan) === */
+  --primary: #8aebff;
+  --primary-container: #22d3ee;
+  --primary-fixed: #a2eeff;
+  --primary-fixed-dim: #2fd9f4;
+  --on-primary: #00363e;
+  --on-primary-container: #005763;
+  --on-primary-fixed: #001f25;
+  --on-primary-fixed-variant: #004e5a;
+  --inverse-primary: #006877;
+
+  /* === Secondary (Amber/Orange) === */
+  --secondary: #ffb95f;
+  --secondary-container: #ee9800;
+  --secondary-fixed: #ffddb8;
+  --secondary-fixed-dim: #ffb95f;
+  --on-secondary: #472a00;
+  --on-secondary-container: #5b3800;
+  --on-secondary-fixed: #2a1700;
+  --on-secondary-fixed-variant: #653e00;
+
+  /* === Tertiary (Pink/Rose) === */
+  --tertiary: #ffd2d5;
+  --tertiary-container: #ffaab2;
+  --tertiary-fixed: #ffdadc;
+  --tertiary-fixed-dim: #ffb2b9;
+  --on-tertiary: #67001f;
+  --on-tertiary-container: #94223a;
+  --on-tertiary-fixed: #400010;
+  --on-tertiary-fixed-variant: #891933;
+
+  /* === Error === */
+  --error: #ffb4ab;
+  --error-container: #93000a;
+  --on-error: #690005;
+  --on-error-container: #ffdad6;
+
+  /* === Text/Content === */
+  --on-background: #dee1f9;
+  --on-surface: #dee1f9;
+  --on-surface-variant: #bbc9cd;
+  --foreground: #dee1f9;
+
+  /* === Outlines === */
+  --outline: #859397;
+  --outline-variant: #3c494c;
+
+  /* === Inverse === */
+  --inverse-surface: #dee1f9;
+  --inverse-on-surface: #2b3041;
+}
+
+@theme inline {
+  /* Surface colors */
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-dim: var(--surface-dim);
+  --color-surface-bright: var(--surface-bright);
+  --color-surface-container-lowest: var(--surface-container-lowest);
+  --color-surface-container-low: var(--surface-container-low);
+  --color-surface-container: var(--surface-container);
+  --color-surface-container-high: var(--surface-container-high);
+  --color-surface-container-highest: var(--surface-container-highest);
+  --color-surface-variant: var(--surface-variant);
+  --color-surface-tint: var(--surface-tint);
+
+  /* Primary */
+  --color-primary: var(--primary);
+  --color-primary-container: var(--primary-container);
+  --color-on-primary: var(--on-primary);
+  --color-on-primary-container: var(--on-primary-container);
+
+  /* Secondary */
+  --color-secondary: var(--secondary);
+  --color-secondary-container: var(--secondary-container);
+  --color-on-secondary: var(--on-secondary);
+  --color-on-secondary-container: var(--on-secondary-container);
+
+  /* Tertiary */
+  --color-tertiary: var(--tertiary);
+  --color-tertiary-container: var(--tertiary-container);
+  --color-on-tertiary: var(--on-tertiary);
+  --color-on-tertiary-container: var(--on-tertiary-container);
+
+  /* Error */
+  --color-error: var(--error);
+  --color-error-container: var(--error-container);
+  --color-on-error: var(--on-error);
+  --color-on-error-container: var(--on-error-container);
+
+  /* Text */
+  --color-foreground: var(--foreground);
+  --color-on-background: var(--on-background);
+  --color-on-surface: var(--on-surface);
+  --color-on-surface-variant: var(--on-surface-variant);
+
+  /* Outlines */
+  --color-outline: var(--outline);
+  --color-outline-variant: var(--outline-variant);
+
+  /* Typography */
+  --font-sans: var(--font-space-grotesk);
+  --font-mono: var(--font-jetbrains-mono);
+  --font-headline: var(--font-space-grotesk);
+  --font-body: var(--font-inter);
+  --font-label: var(--font-inter);
+}
+
+body {
+  background: var(--background);
+  color: var(--on-surface);
+  font-family: var(--font-body, 'Inter', sans-serif);
+}
+
+/* ================================================
+   Component Utilities
+   ================================================ */
+
+/* Panel - NO borders, use surface layering */
+.panel {
+  background: var(--surface-container);
+  border-radius: 0.75rem;
+}
+
+/* Engraved input style from Stitch */
+.engraved-input {
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.3);
+  background: var(--surface-container-lowest);
+  border: none;
+  border-bottom: 2px solid transparent;
+}
+
+.engraved-input:focus {
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.3), 0 0 8px rgba(138, 235, 255, 0.3);
+  border-bottom: 2px solid var(--primary);
+  outline: none;
+}
+
+/* Custom scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: var(--background);
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--surface-container-highest);
+  border-radius: 10px;
+}
+
+/* Selection styling */
+::selection {
+  background: var(--primary-container);
+  color: var(--on-primary-container);
+}
+
+/* Primary gradient button */
+.btn-primary {
+  background: linear-gradient(to bottom right, var(--primary), var(--primary-container));
+  color: var(--on-primary-container);
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  box-shadow: 0 0 15px rgba(47, 217, 244, 0.3);
+}
+
+.btn-primary:hover {
+  filter: brightness(1.1);
+}
+
+/* Secondary/outline button */
+.btn-secondary {
+  background: var(--surface-container-high);
+  color: var(--on-surface);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.btn-secondary:hover {
+  background: var(--surface-variant);
+}
+
+/* Status badge base */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.125rem 0.5rem;
+  border-radius: 0.25rem;
+  font-size: 0.625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.badge-primary {
+  background: rgba(138, 235, 255, 0.1);
+  color: var(--primary);
+  border: 1px solid rgba(138, 235, 255, 0.3);
+}
+
+.badge-secondary {
+  background: rgba(255, 185, 95, 0.1);
+  color: var(--secondary);
+  border: 1px solid rgba(255, 185, 95, 0.4);
+}
+
+.badge-error {
+  background: rgba(255, 180, 171, 0.1);
+  color: var(--error);
+  border: 1px solid rgba(255, 180, 171, 0.3);
+}
+
+.badge-success {
+  background: rgba(34, 197, 94, 0.1);
+  color: #4ade80;
+  border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+/* Section header label style */
+.section-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--primary);
+}
+
+/* Field label style */
+.field-label {
+  font-size: 0.625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: -0.025em;
+  color: var(--on-surface-variant);
+}
+
+/* Transitions */
+.transition-dropdown {
+  transition: all 250ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.transition-hover {
+  transition: all 200ms cubic-bezier(0.4, 0, 0.2, 1);
+}

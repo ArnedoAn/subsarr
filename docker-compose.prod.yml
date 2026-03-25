@@ -1,0 +1,39 @@
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
+  api:
+    image: ${SUBSYNC_REGISTRY}/${SUBSYNC_API_IMAGE}:${SUBSYNC_TAG}
+    restart: unless-stopped
+    ports:
+      - '3001:3001'
+    environment:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      REDIS_URL: redis://redis:6379
+      SUBSYNC_MEDIA_DIRS: ${SUBSYNC_MEDIA_DIRS:-/media}
+      SUBSYNC_SCAN_CACHE_TTL_MINUTES: ${SUBSYNC_SCAN_CACHE_TTL_MINUTES:-30}
+      SUBSYNC_SOURCE_LANGUAGE: ${SUBSYNC_SOURCE_LANGUAGE:-eng}
+      SUBSYNC_TARGET_LANGUAGE: ${SUBSYNC_TARGET_LANGUAGE:-spa}
+      SUBSYNC_CONCURRENCY: ${SUBSYNC_CONCURRENCY:-2}
+      SUBSYNC_SETTINGS_FILE_PATH: /data/subsync.settings.json
+      SUBSYNC_PATH_EXCLUSIONS: ${SUBSYNC_PATH_EXCLUSIONS:-}
+      SUBSYNC_FILE_TOO_LARGE_BYTES: ${SUBSYNC_FILE_TOO_LARGE_BYTES:-}
+      PORT: 3001
+    volumes:
+      - ${SUBSYNC_MEDIA_VOLUME}:/media
+      - ${SUBSYNC_DATA_VOLUME:-./data}:/data
+    depends_on:
+      - redis
+
+  web:
+    image: ${SUBSYNC_REGISTRY}/${SUBSYNC_WEB_IMAGE}:${SUBSYNC_TAG}
+    restart: unless-stopped
+    ports:
+      - '3000:3000'
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3001}
+      PORT: 3000
+    depends_on:
+      - api
