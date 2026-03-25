@@ -51,8 +51,7 @@ jobs:
           sbom: false
           tags: ${{ steps.meta-backend.outputs.tags }}
           labels: ${{ steps.meta-backend.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Cache disabled to workaround Coolify registry issue
 
       # --- FRONTEND ---
       - name: Extract metadata for Frontend
@@ -74,8 +73,7 @@ jobs:
           sbom: false
           tags: ${{ steps.meta-frontend.outputs.tags }}
           labels: ${{ steps.meta-frontend.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Cache disabled to workaround Coolify registry issue
 
   deploy:
     needs: build-and-push
