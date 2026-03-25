@@ -15,6 +15,7 @@ export interface TranslationJobPayload {
   sourceTrackIndex: number;
   triggeredBy: 'manual' | 'batch';
   forceBypassRules?: boolean;
+  provider?: 'openrouter' | 'deepseek';
 }
 
 export interface JobProgressEvent {
@@ -22,6 +23,7 @@ export interface JobProgressEvent {
   progressPercent: number;
   message: string;
   timestamp: string;
+  details?: any;
 }
 
 export interface JobReturnValue {

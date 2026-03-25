@@ -126,6 +126,7 @@ export class JobsService {
         sourceTrackIndex: dto.sourceTrackIndex,
         triggeredBy: dto.triggeredBy,
         forceBypassRules: dto.forceBypassRules ?? false,
+        provider: dto.provider,
       },
       {
         removeOnComplete: 200,
@@ -168,6 +169,7 @@ export class JobsService {
           sourceTrackIndex: item.sourceTrackIndex,
           triggeredBy: dto.triggeredBy,
           forceBypassRules: dto.forceBypassRules,
+          provider: dto.provider,
         });
 
         results.push({

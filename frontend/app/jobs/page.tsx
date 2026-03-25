@@ -10,6 +10,7 @@ interface LiveEvent {
   progressPercent: number;
   message: string;
   timestamp: string;
+  details?: any;
 }
 
 interface LogEntry {
@@ -18,6 +19,7 @@ interface LogEntry {
   phase: string;
   message: string;
   timestamp: string;
+  details?: any;
 }
 
 export default function JobsPage() {
@@ -311,21 +313,28 @@ export default function JobsPage() {
           </div>
           <div className="max-h-64 overflow-y-auto rounded-lg bg-surface-container-lowest p-4 font-mono text-xs custom-scrollbar">
             {consoleLogs.map((log) => (
-              <p key={log.id} className="mb-1 text-on-surface-variant">
-                <span className="text-on-surface">[{new Date(log.timestamp).toLocaleTimeString()}]</span>{' '}
-                <span
-                  className={
-                    log.level === 'error'
-                      ? 'text-error'
-                      : log.level === 'warn'
-                        ? 'text-secondary'
-                        : 'text-primary'
-                  }
-                >
-                  {log.level.toUpperCase()}
-                </span>
-                : {log.message}
-              </p>
+              <div key={log.id} className="mb-2">
+                <p className="text-on-surface-variant">
+                  <span className="text-on-surface">[{new Date(log.timestamp).toLocaleTimeString()}]</span>{' '}
+                  <span
+                    className={
+                      log.level === 'error'
+                        ? 'text-error'
+                        : log.level === 'warn'
+                          ? 'text-secondary'
+                          : 'text-primary'
+                    }
+                  >
+                    {log.level.toUpperCase()}
+                  </span>
+                  : {log.message}
+                </p>
+                {log.details && (
+                  <pre className="mt-1 ml-4 overflow-x-auto rounded bg-surface-container-high p-2 text-[10px] text-on-surface-variant">
+                    {JSON.stringify(log.details, null, 2)}
+                  </pre>
+                )}
+              </div>
             ))}
           </div>
         </div>

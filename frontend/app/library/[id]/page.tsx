@@ -19,6 +19,7 @@ export default function LibraryItemPage() {
   const [sourceLanguage, setSourceLanguage] = useState('eng');
   const [targetLanguage, setTargetLanguage] = useState('spa');
   const [forceBypass, setForceBypass] = useState(false);
+  const [provider, setProvider] = useState<'openrouter' | 'deepseek'>('openrouter');
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -57,6 +58,7 @@ export default function LibraryItemPage() {
       sourceTrackIndex,
       triggeredBy: 'manual',
       forceBypassRules: forceBypass,
+      provider,
     });
 
     await load();
@@ -228,6 +230,19 @@ export default function LibraryItemPage() {
             >
               QUEUE TRANSLATION
             </button>
+            <div className="flex justify-center mt-2">
+              <label className="text-xs text-on-surface-variant flex items-center gap-2">
+                Provider:
+                <select
+                  value={provider}
+                  onChange={(e) => setProvider(e.target.value as 'openrouter' | 'deepseek')}
+                  className="bg-transparent border-none text-on-surface cursor-pointer outline-none font-bold"
+                >
+                  <option value="openrouter">OpenRouter (Free)</option>
+                  <option value="deepseek">DeepSeek (Paid)</option>
+                </select>
+              </label>
+            </div>
           </div>
         </div>
       </div>

@@ -37,4 +37,8 @@ export class CreateJobDto {
   @IsOptional()
   @IsBoolean()
   forceBypassRules?: boolean;
+
+  @IsOptional()
+  @IsIn(['openrouter', 'deepseek'])
+  provider?: 'openrouter' | 'deepseek';
 }

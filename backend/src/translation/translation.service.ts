@@ -41,20 +41,44 @@ export class TranslationService {
     targetLanguage: string,
     openRouterApiKey: string,
     deepSeekApiKey: string,
+    options?: {
+      provider?: 'openrouter' | 'deepseek';
+      onProgress?: (info: {
+        batchIndex: number;
+        totalBatches: number;
+        progressPercent: number;
+        message: string;
+        details?: any;
+      }) => void;
+    }
   ): Promise<TranslationResult> {
     const output = [...lines];
-    let tierUsed: TranslationTier = 'free';
+    let tierUsed: TranslationTier = options?.provider === 'deepseek' ? 'paid' : 'free';
     let promptTokens = 0;
     let completionTokens = 0;
     const warnings: string[] = [];
+
+    const totalBatches = Math.ceil(lines.length / (BATCH_SIZE - OVERLAP_SIZE));
+    let batchIndex = 0;
 
     for (
       let start = 0;
       start < lines.length;
       start += BATCH_SIZE - OVERLAP_SIZE
     ) {
+      batchIndex++;
       const end = Math.min(start + BATCH_SIZE, lines.length);
       const slice = lines.slice(start, end);
+
+      if (options?.onProgress) {
+        options.onProgress({
+          batchIndex,
+          totalBatches,
+          progressPercent: Math.floor((batchIndex / totalBatches) * 100),
+          message: `Translating batch ${batchIndex} of ${totalBatches} (${slice.length} lines)`,
+          details: { start, end, lines: slice.length },
+        });
+      }
 
       const result = await this.translateBatch(
         slice,
@@ -62,6 +86,7 @@ export class TranslationService {
         targetLanguage,
         openRouterApiKey,
         deepSeekApiKey,
+        options?.provider
       );
       const effectiveStart = start === 0 ? 0 : OVERLAP_SIZE;
       const toApply = result.translated.slice(effectiveStart);
@@ -100,12 +125,14 @@ export class TranslationService {
     targetLanguage: string,
     openRouterApiKey: string,
     deepSeekApiKey: string,
+    provider?: 'openrouter' | 'deepseek',
   ): Promise<BatchResult> {
     const firstAttempt = await this.callLLM(
       batch,
       targetLanguage,
       openRouterApiKey,
       deepSeekApiKey,
+      provider,
     );
     if (this.isValidBatchLength(batch, firstAttempt.translated)) {
       return firstAttempt;
@@ -116,6 +143,7 @@ export class TranslationService {
       targetLanguage,
       openRouterApiKey,
       deepSeekApiKey,
+      provider,
     );
     if (this.isValidBatchLength(batch, retryAttempt.translated)) {
       return retryAttempt;
@@ -142,7 +170,12 @@ export class TranslationService {
     targetLanguage: string,
     openRouterApiKey: string,
     deepSeekApiKey: string,
+    provider?: 'openrouter' | 'deepseek',
   ): Promise<BatchResult> {
+    if (provider === 'deepseek') {
+      return await this.callDeepSeek(batch, targetLanguage, deepSeekApiKey);
+    }
+
     try {
       return await this.callOpenRouter(batch, targetLanguage, openRouterApiKey);
     } catch (error) {

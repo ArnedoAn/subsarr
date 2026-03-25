@@ -27,6 +27,7 @@ export default function LibraryPage() {
 
   const [batchSource, setBatchSource] = useState('eng');
   const [batchTarget, setBatchTarget] = useState('spa');
+  const [batchProvider, setBatchProvider] = useState<'openrouter' | 'deepseek'>('openrouter');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -107,6 +108,7 @@ export default function LibraryPage() {
       targetLanguage: batchTarget,
       triggeredBy: 'batch',
       forceBypassRules: false,
+      provider: batchProvider,
     });
   };
 
@@ -200,6 +202,21 @@ export default function LibraryPage() {
                         {lang.code.toUpperCase()}
                       </option>
                     ))}
+                  </select>
+                  <span className="material-symbols-outlined absolute right-2 top-1/2 -translate-y-1/2 text-on-surface-variant pointer-events-none text-[16px]">
+                    expand_more
+                  </span>
+                </div>
+                <span className="material-symbols-outlined text-on-surface-variant text-[16px]">arrow_forward</span>
+                <div className="relative">
+                  <select
+                    value={batchProvider}
+                    onChange={(e) => setBatchProvider(e.target.value as 'openrouter' | 'deepseek')}
+                    className="engraved-input rounded-lg px-3 py-2 pr-8 text-xs text-on-surface appearance-none bg-surface-container-lowest cursor-pointer transition-all duration-200"
+                    title="Provider for Batch Translate"
+                  >
+                    <option value="openrouter">OpenRouter (Free)</option>
+                    <option value="deepseek">DeepSeek (Paid)</option>
                   </select>
                   <span className="material-symbols-outlined absolute right-2 top-1/2 -translate-y-1/2 text-on-surface-variant pointer-events-none text-[16px]">
                     expand_more

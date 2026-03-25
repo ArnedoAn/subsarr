@@ -46,12 +46,14 @@ export class TranslationJobProcessor {
         | 'failed',
       progressPercent: number,
       message: string,
+      details?: any,
     ) => {
       this.jobsEventsService.publish(jobId, {
         phase,
         progressPercent,
         message,
         timestamp: new Date().toISOString(),
+        details,
       });
       void job.progress(progressPercent);
 
@@ -60,6 +62,7 @@ export class TranslationJobProcessor {
         level: phase === 'failed' ? 'error' : 'info',
         phase,
         message,
+        details,
       });
     };
 
@@ -101,6 +104,13 @@ export class TranslationJobProcessor {
         job.data.targetLanguage,
         settings.openRouterApiKey,
         settings.deepSeekApiKey,
+        {
+          provider: job.data.provider,
+          onProgress: (info) => {
+            const overallProgress = 25 + Math.floor((info.progressPercent / 100) * 65);
+            publish('translating', overallProgress, info.message, info.details);
+          },
+        }
       );
 
       for (const warning of translated.warnings) {

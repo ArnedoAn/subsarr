@@ -45,4 +45,8 @@ export class CreateBatchJobsDto {
 
   @IsBoolean()
   forceBypassRules!: boolean;
+
+  @IsOptional()
+  @IsIn(['openrouter', 'deepseek'])
+  provider?: 'openrouter' | 'deepseek';
 }
