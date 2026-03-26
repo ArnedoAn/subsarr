@@ -16,29 +16,27 @@ interface FileSystemEntry {
 
 // Mock API function
 const fetchDirectory = async (currentPath: string): Promise<FileSystemEntry[]> => {
-  // Simulate network delay
-  await new Promise((resolve) => setTimeout(resolve, 300));
-
-  // Mock data
-  const base = currentPath === "" || currentPath === "/" ? "/" : currentPath.replace(/\/$/, "") + "/";
-  
-  if (base === "/") {
-    return [
-      { name: "data", isDirectory: true, path: "/data" },
-      { name: "media", isDirectory: true, path: "/media" },
-      { name: "mnt", isDirectory: true, path: "/mnt" },
-      { name: "movies", isDirectory: true, path: "/movies" },
-      { name: "tv", isDirectory: true, path: "/tv" },
-    ];
+  try {
+    const response = await fetch(`/api/system/directory?path=${encodeURIComponent(currentPath)}`);
+    if (!response.ok) {
+      throw new Error('Failed to fetch directory');
+    }
+    return await response.json();
+  } catch (error) {
+    console.error('Error fetching directory:', error);
+    
+    // Fallback Mock data
+    const base = currentPath === "" || currentPath === "/" ? "/" : currentPath.replace(/\/$/, "") + "/";
+    
+    if (base === "/") {
+      return [
+        { name: "data", isDirectory: true, path: "/data" },
+        { name: "media", isDirectory: true, path: "/media" },
+        { name: "mnt", isDirectory: true, path: "/mnt" },
+      ];
+    }
+    return [];
   }
-
-  return [
-    { name: "shows", isDirectory: true, path: `${base}shows` },
-    { name: "movies", isDirectory: true, path: `${base}movies` },
-    { name: "anime", isDirectory: true, path: `${base}anime` },
-    { name: "file1.mkv", isDirectory: false, path: `${base}file1.mkv` },
-    { name: "file2.mp4", isDirectory: false, path: `${base}file2.mp4` },
-  ];
 };
 
 export function PathBrowser({ value, onChange, placeholder = "Select path..." }: PathBrowserProps) {

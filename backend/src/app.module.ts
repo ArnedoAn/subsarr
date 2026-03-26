@@ -12,6 +12,7 @@ import { ExtractionModule } from './extraction/extraction.module';
 import { TranslationModule } from './translation/translation.module';
 import { OutputModule } from './output/output.module';
 import { JobsModule } from './jobs/jobs.module';
+import { SystemModule } from './system/system.module';
 
 @Module({
   imports: [
@@ -49,6 +50,7 @@ import { JobsModule } from './jobs/jobs.module';
     TranslationModule,
     OutputModule,
     JobsModule,
+    SystemModule,
   ],
   controllers: [AppController],
   providers: [AppService],
