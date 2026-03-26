@@ -9,12 +9,33 @@ async function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function isRetryableError(error: Error): boolean {
+  const message = error.message?.toLowerCase() ?? '';
+  return message.includes('econnrefused') || 
+         message.includes('network') || 
+         message.includes('failed to fetch') ||
+         message.includes('timeout');
+}
+
+function isRetryableStatus(status: number): boolean {
+  // Retry on 5xx server errors and 429 rate limit
+  return status >= 500 || status === 429;
+}
+
 async function fetchWithRetry(url: string, options: RequestInit, retries = MAX_RETRIES): Promise<Response> {
   try {
     const response = await fetch(url, options);
+    
+    // Retry on server errors
+    if (isRetryableStatus(response.status) && retries > 0) {
+      console.log(`API returned ${response.status}, retrying in ${RETRY_DELAY_MS}ms... (${retries} retries left)`);
+      await sleep(RETRY_DELAY_MS);
+      return fetchWithRetry(url, options, retries - 1);
+    }
+    
     return response;
   } catch (error) {
-    if (retries > 0 && (error as Error).message?.includes('ECONNREFUSED')) {
+    if (retries > 0 && isRetryableError(error as Error)) {
       console.log(`API connection failed, retrying in ${RETRY_DELAY_MS}ms... (${retries} retries left)`);
       await sleep(RETRY_DELAY_MS);
       return fetchWithRetry(url, options, retries - 1);

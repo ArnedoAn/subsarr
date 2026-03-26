@@ -227,7 +227,9 @@ export default function JobsPage() {
                       </div>
                       <p className="mt-1 text-xs text-on-surface-variant">{progress}%</p>
                     </td>
-                    <td className="px-6 py-4 text-on-surface-variant">{phase}</td>
+                    <td className="px-6 py-4 text-on-surface-variant">
+                      <PhaseBadge phase={phase} />
+                    </td>
                     <td className="px-6 py-4 text-on-surface-variant font-mono text-xs">
                       {job.returnValue?.usage.totalTokens ?? 0} tokens
                     </td>
@@ -249,7 +251,7 @@ export default function JobsPage() {
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-2">
-                        {job.state === 'waiting' || job.state === 'failed' ? (
+                        {job.state === 'waiting' || job.state === 'active' || job.state === 'failed' ? (
                           <button
                             onClick={() => void cancel(job.id)}
                             className="bg-error/10 text-error border border-error/30 px-3 py-1.5 rounded text-[10px] font-bold tracking-widest hover:bg-error/20 transition-colors"
@@ -393,4 +395,29 @@ function formatElapsed(ms: number): string {
   }
 
   return `${minutes}m ${remainingSeconds}s`;
+}
+
+function PhaseBadge({ phase }: { phase: string }) {
+  const phaseConfig: Record<string, { bg: string; text: string; icon?: string }> = {
+    waiting: { bg: 'bg-secondary/20', text: 'text-secondary', icon: 'hourglass_empty' },
+    active: { bg: 'bg-primary/20', text: 'text-primary', icon: 'play_arrow' },
+    parsing: { bg: 'bg-tertiary/20', text: 'text-tertiary', icon: 'description' },
+    translating: { bg: 'bg-primary/30', text: 'text-primary', icon: 'translate' },
+    writing: { bg: 'bg-tertiary/30', text: 'text-tertiary', icon: 'edit_document' },
+    completed: { bg: 'bg-success/20', text: 'text-success', icon: 'check_circle' },
+    failed: { bg: 'bg-error/20', text: 'text-error', icon: 'error' },
+    cancelled: { bg: 'bg-error/10', text: 'text-error', icon: 'cancel' },
+  };
+
+  const normalizedPhase = phase.toLowerCase();
+  const config = phaseConfig[normalizedPhase] ?? { bg: 'bg-surface-variant/50', text: 'text-on-surface-variant' };
+
+  return (
+    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold tracking-wider uppercase ${config.bg} ${config.text}`}>
+      {config.icon && (
+        <span className="material-symbols-outlined text-[14px]">{config.icon}</span>
+      )}
+      {phase}
+    </span>
+  );
 }

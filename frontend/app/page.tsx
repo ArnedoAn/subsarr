@@ -23,6 +23,7 @@ export default function LibraryPage() {
   const [missingTargetOnly, setMissingTargetOnly] = useState(false);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
+  const [rescanning, setRescanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [batchSource, setBatchSource] = useState('eng');
@@ -69,6 +70,21 @@ export default function LibraryPage() {
       setError(requestError instanceof Error ? requestError.message : 'Failed to fetch library');
     } finally {
       setLoading(false);
+    }
+  }, []);
+
+  const rescan = useCallback(async () => {
+    setRescanning(true);
+    setError(null);
+    try {
+      // Use POST to /library/rescan endpoint for a fresh scan
+      const itemsResponse = await apiPost<MediaItemWithRules[]>('/library/rescan');
+      setItems(itemsResponse);
+    } catch (requestError) {
+      const errorMessage = requestError instanceof Error ? requestError.message : 'Rescan failed';
+      setError(`Rescan failed: ${errorMessage}. Try again.`);
+    } finally {
+      setRescanning(false);
     }
   }, []);
 
@@ -128,6 +144,33 @@ export default function LibraryPage() {
       [id]: !previous[id],
     }));
   };
+
+  const toggleSelectAll = () => {
+    const allFilteredSelected = filtered.every((item) => selected[item.id]);
+    
+    if (allFilteredSelected) {
+      // Deselect all filtered items
+      setSelected((previous) => {
+        const next = { ...previous };
+        for (const item of filtered) {
+          delete next[item.id];
+        }
+        return next;
+      });
+    } else {
+      // Select all filtered items
+      setSelected((previous) => {
+        const next = { ...previous };
+        for (const item of filtered) {
+          next[item.id] = true;
+        }
+        return next;
+      });
+    }
+  };
+
+  const allFilteredSelected = filtered.length > 0 && filtered.every((item) => selected[item.id]);
+  const someFilteredSelected = filtered.some((item) => selected[item.id]) && !allFilteredSelected;
 
   const translateSelected = async () => {
     if (selectedItems.length === 0) {
@@ -309,11 +352,14 @@ export default function LibraryPage() {
           {/* Action Buttons */}
           <div className="flex gap-2 flex-shrink-0">
             <button
-              onClick={() => void load()}
-              className="bg-surface-container-high px-4 py-2.5 rounded text-xs font-bold tracking-widest text-on-surface hover:bg-surface-variant transition-colors flex items-center gap-2"
+              onClick={() => void rescan()}
+              disabled={rescanning}
+              className="bg-surface-container-high px-4 py-2.5 rounded text-xs font-bold tracking-widest text-on-surface hover:bg-surface-variant transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <span className="material-symbols-outlined text-[16px]">refresh</span>
-              <span className="hidden sm:inline">RESCAN</span>
+              <span className={`material-symbols-outlined text-[16px] ${rescanning ? 'animate-spin' : ''}`}>
+                {rescanning ? 'progress_activity' : 'refresh'}
+              </span>
+              <span className="hidden sm:inline">{rescanning ? 'SCANNING...' : 'RESCAN'}</span>
             </button>
             <button
               onClick={() => void translateSelected()}
@@ -336,7 +382,16 @@ export default function LibraryPage() {
             <thead className="bg-surface-container-low border-b border-cyan-400/15">
               <tr>
                 <th className="px-4 py-3 text-xs font-bold uppercase tracking-widest text-on-surface-variant w-12">
-                  <span className="sr-only">Select</span>
+                  <input
+                    type="checkbox"
+                    checked={allFilteredSelected}
+                    ref={(el) => {
+                      if (el) el.indeterminate = someFilteredSelected;
+                    }}
+                    onChange={toggleSelectAll}
+                    className="h-4 w-4 accent-primary cursor-pointer"
+                    title={allFilteredSelected ? 'Deselect all filtered items' : 'Select all filtered items'}
+                  />
                 </th>
                 <th className="px-4 py-3 text-xs font-bold uppercase tracking-widest text-on-surface-variant">File</th>
                 <th className="px-4 py-3 text-xs font-bold uppercase tracking-widest text-on-surface-variant">Tracks</th>

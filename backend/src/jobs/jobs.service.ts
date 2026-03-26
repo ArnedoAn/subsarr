@@ -236,16 +236,34 @@ export class JobsService {
     }
 
     const state = await job.getState();
-    if (state !== 'waiting' && state !== 'delayed' && state !== 'failed') {
+    const allowedStates = ['waiting', 'delayed', 'failed', 'active'];
+
+    if (!allowedStates.includes(state)) {
       throw new Error(
-        `Only queued or failed jobs can be canceled. Current state: ${state}`,
+        `Cannot cancel job in state: ${state}. Allowed states: ${allowedStates.join(', ')}`,
       );
     }
 
+    // For active jobs, we need to discard/fail them before removing
+    if (state === 'active') {
+      // In Bull (not BullMQ), active jobs need to be marked as failed first
+      await job.discard();
+      await job.moveToFailed({ message: 'Job cancelled by user' }, true);
+    }
+
     await job.remove();
+
+    this.jobLogsService.append({
+      jobId: id,
+      level: 'info',
+      phase: 'cancelled',
+      message: `Job cancelled by user (was in state: ${state})`,
+    });
+
     return {
       id,
       canceled: true,
+      previousState: state,
     };
   }
 

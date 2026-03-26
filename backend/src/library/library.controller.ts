@@ -48,6 +48,21 @@ export class LibraryController {
 
   @Post('rescan')
   async rescan() {
-    return this.libraryService.rescan();
+    this.logger.log('POST /library/rescan called - forcing full rescan');
+    try {
+      const items = await this.libraryService.rescan();
+      this.logger.log(`Rescan completed. Found ${items.length} items`);
+      
+      // Include rule evaluation like GET endpoint
+      return Promise.all(
+        items.map(async (item) => ({
+          ...item,
+          ruleStatus: await this.rulesService.evaluate(item),
+        })),
+      );
+    } catch (err) {
+      this.logger.error(`Rescan failed: ${err}`);
+      throw err;
+    }
   }
 }
