@@ -82,5 +82,6 @@ jobs:
       - name: Trigger Coolify Webhook
         run: |
           echo "Triggering deployment on Coolify..."
-          curl -s -X GET "${{ secrets.COOLIFY_WEBHOOK_URL }}"
+          curl -s -X GET "${{ vars.COOLIFY_URL }}" \
+            --header "Authorization: Bearer ${{ secrets.COOLIFY_TOKEN }}"
           echo "Webhook sent!"
