@@ -2,6 +2,11 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   api:
     image: ghcr.io/arnedoan/subsarr-backend:latest
@@ -27,7 +32,14 @@ services:
       - ${SUBSYNC_MEDIA_VOLUME}:/media
       - ${SUBSYNC_DATA_VOLUME:-./data}:/data
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3001/settings"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   web:
     image: ghcr.io/arnedoan/subsarr-frontend:latest
@@ -36,6 +48,8 @@ services:
       - '3000:3000'
     environment:
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3001}
+      API_INTERNAL_URL: http://api:3001
       PORT: 3000
     depends_on:
-      - api
+      api:
+        condition: service_healthy

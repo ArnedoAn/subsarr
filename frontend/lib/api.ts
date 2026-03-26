@@ -2,8 +2,29 @@ const API_URL = typeof window !== 'undefined'
   ? '/api' 
   : (process.env.API_INTERNAL_URL ?? 'http://127.0.0.1:3001');
 
+const MAX_RETRIES = 3;
+const RETRY_DELAY_MS = 2000;
+
+async function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function fetchWithRetry(url: string, options: RequestInit, retries = MAX_RETRIES): Promise<Response> {
+  try {
+    const response = await fetch(url, options);
+    return response;
+  } catch (error) {
+    if (retries > 0 && (error as Error).message?.includes('ECONNREFUSED')) {
+      console.log(`API connection failed, retrying in ${RETRY_DELAY_MS}ms... (${retries} retries left)`);
+      await sleep(RETRY_DELAY_MS);
+      return fetchWithRetry(url, options, retries - 1);
+    }
+    throw error;
+  }
+}
+
 export async function apiGet<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_URL}${path}`, { cache: 'no-store' });
+  const response = await fetchWithRetry(`${API_URL}${path}`, { cache: 'no-store' });
   if (!response.ok) {
     throw new Error(`API request failed: ${response.status}`);
   }
@@ -12,7 +33,7 @@ export async function apiGet<T>(path: string): Promise<T> {
 }
 
 export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
-  const response = await fetch(`${API_URL}${path}`, {
+  const response = await fetchWithRetry(`${API_URL}${path}`, {
     method: 'POST',
     cache: 'no-store',
     headers: {
@@ -30,7 +51,7 @@ export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
 }
 
 export async function apiPut<T>(path: string, body: unknown): Promise<T> {
-  const response = await fetch(`${API_URL}${path}`, {
+  const response = await fetchWithRetry(`${API_URL}${path}`, {
     method: 'PUT',
     cache: 'no-store',
     headers: {
