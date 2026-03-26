@@ -4,7 +4,7 @@ services:
     restart: unless-stopped
 
   api:
-    image: ${SUBSYNC_REGISTRY}/${SUBSYNC_API_IMAGE}:${SUBSYNC_TAG}
+    image: ghcr.io/arnedoan/subsarr-backend:latest
     restart: unless-stopped
     ports:
       - '3001:3001'
@@ -28,7 +28,7 @@ services:
       - redis
 
   web:
-    image: ${SUBSYNC_REGISTRY}/${SUBSYNC_WEB_IMAGE}:${SUBSYNC_TAG}
+    image: ghcr.io/arnedoan/subsarr-frontend:latest
     restart: unless-stopped
     ports:
       - '3000:3000'
