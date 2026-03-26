@@ -273,7 +273,7 @@ export default function JobsPage() {
                           </button>
                         ) : null}
                         <Link
-                          href={`/logs?jobId=${job.id}`}
+                          href={`/archive?jobId=${job.id}`}
                           className="bg-surface-container-high text-on-surface px-3 py-1.5 rounded text-[10px] font-bold tracking-widest hover:bg-surface-variant transition-colors"
                         >
                           LOGS

@@ -6,7 +6,7 @@ import { usePathname } from 'next/navigation';
 const links = [
   { href: '/', label: 'Library', icon: 'video_library' },
   { href: '/jobs', label: 'Jobs', icon: 'work_history' },
-  { href: '/logs', label: 'Logs', icon: 'terminal' },
+  { href: '/archive', label: 'Archive', icon: 'terminal' },
   { href: '/settings', label: 'Settings', icon: 'settings' },
 ];
 
@@ -35,10 +35,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               Jobs
             </Link>
             <Link
-              href="/logs"
+              href="/archive"
               className="font-headline tracking-[0.05em] uppercase text-sm font-bold text-on-surface opacity-70 hover:text-primary hover:opacity-100 transition-all duration-200"
             >
-              Logs
+              Archive
             </Link>
           </nav>
         </div>

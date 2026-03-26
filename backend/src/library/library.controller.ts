@@ -1,10 +1,12 @@
-import { Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { Controller, Get, Param, Post, Query, Logger } from '@nestjs/common';
 import { LibraryService } from './library.service';
 import { RulesService } from '../rules/rules.service';
 import { LibraryQueryDto } from './dto/library-query.dto';
 
 @Controller('library')
 export class LibraryController {
+  private readonly logger = new Logger(LibraryController.name);
+
   constructor(
     private readonly libraryService: LibraryService,
     private readonly rulesService: RulesService,
@@ -12,19 +14,26 @@ export class LibraryController {
 
   @Get()
   async list(@Query() query: LibraryQueryDto) {
-    const items = await this.libraryService.getLibrary(false);
-    const includeRules = query.includeRules === 'true';
+    this.logger.log(`GET /library called with includeRules=${query.includeRules}`);
+    try {
+      const items = await this.libraryService.getLibrary(false);
+      this.logger.log(`Library returned ${items.length} items`);
+      const includeRules = query.includeRules === 'true';
 
-    if (!includeRules) {
-      return items;
+      if (!includeRules) {
+        return items;
+      }
+
+      return Promise.all(
+        items.map(async (item) => ({
+          ...item,
+          ruleStatus: await this.rulesService.evaluate(item),
+        })),
+      );
+    } catch (err) {
+      this.logger.error(`Failed to get library: ${err}`);
+      throw err;
     }
-
-    return Promise.all(
-      items.map(async (item) => ({
-        ...item,
-        ruleStatus: await this.rulesService.evaluate(item),
-      })),
-    );
   }
 
   @Get(':id')

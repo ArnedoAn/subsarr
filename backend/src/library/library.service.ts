@@ -54,17 +54,32 @@ export class LibraryService {
     const ttlMs = settings.scanCacheTtlMinutes * 60_000;
     const now = Date.now();
 
+    this.logger.log(`getLibrary called. forceRescan=${forceRescan}, mediaDirs=${JSON.stringify(settings.mediaDirs)}`);
+
     if (!forceRescan && this.cache && this.cache.expiresAt > now) {
+      this.logger.log(`Returning cached library with ${this.cache.items.length} items`);
       return this.cache.items;
     }
 
     const items: MediaItem[] = [];
     for (const mediaRoot of settings.mediaDirs) {
-      const files = await this.walkDirectory(mediaRoot);
-      for (const mediaFile of files) {
-        items.push(await this.buildMediaItem(mediaFile));
+      this.logger.log(`Scanning directory: ${mediaRoot}`);
+      try {
+        const files = await this.walkDirectory(mediaRoot);
+        this.logger.log(`Found ${files.length} media files in ${mediaRoot}`);
+        for (const mediaFile of files) {
+          try {
+            items.push(await this.buildMediaItem(mediaFile));
+          } catch (err) {
+            this.logger.error(`Failed to build media item for ${mediaFile}: ${err}`);
+          }
+        }
+      } catch (err) {
+        this.logger.error(`Failed to scan directory ${mediaRoot}: ${err}`);
       }
     }
+
+    this.logger.log(`Library scan complete. Total items: ${items.length}`);
 
     this.cache = {
       items,
