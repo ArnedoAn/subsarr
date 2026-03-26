@@ -22,7 +22,7 @@ export class SystemService {
       return entries.map(entry => ({
         name: entry.name,
         isDirectory: entry.isDirectory(),
-        path: path.join(normalizedPath, entry.name).replace(/\/g, '/') // Ensure consistent separators
+        path: path.join(normalizedPath, entry.name).replace(/\\/g, '/') // Ensure consistent separators
       })).sort((a, b) => {
         // Directories first
         if (a.isDirectory && !b.isDirectory) return -1;
