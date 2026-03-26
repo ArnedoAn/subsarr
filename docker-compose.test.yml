@@ -1,0 +1,36 @@
+services:
+  redis:
+    image: 'redis:7-alpine'
+    restart: unless-stopped
+
+  api:
+    image: 'ghcr.io/arnedoan/subsarr-backend:latest'
+    restart: unless-stopped
+    expose:
+      - '3001'
+    environment:
+      # Puedes poner llaves falsas para probar que levante
+      OPENROUTER_API_KEY: sk-test
+      DEEPSEEK_API_KEY: sk-test
+      REDIS_URL: 'redis://redis:6379'
+      # Usaremos una carpeta local temporal para evitar errores 500 por falta de permisos/directorios
+      SUBSYNC_MEDIA_DIRS: '/media'
+      SUBSYNC_SETTINGS_FILE_PATH: /data/subsync.settings.json
+      PORT: 3001
+    volumes:
+      - '/mnt/d/Downloads/Succession/S03:/media'
+      - './test-data:/data'
+    depends_on:
+      - redis
+
+  web:
+    image: 'ghcr.io/arnedoan/subsarr-frontend:latest'
+    restart: unless-stopped
+    ports:
+      - '3040:3040'
+    environment:
+      NEXT_PUBLIC_API_URL: 'http://api:3001'
+      API_INTERNAL_URL: 'http://api:3001'
+      PORT: 3040
+    depends_on:
+      - api

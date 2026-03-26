@@ -1,0 +1,38 @@
+{
+  "mediaDirs": [
+    "/media"
+  ],
+  "sourceLanguage": "eng",
+  "targetLanguage": "spa",
+  "openRouterApiKey": "sk-test",
+  "deepSeekApiKey": "sk-test",
+  "scanCacheTtlMinutes": 30,
+  "concurrency": 2,
+  "pathContainsExclusions": [],
+  "rules": [
+    {
+      "id": "already-has-target-subtitle",
+      "enabled": true
+    },
+    {
+      "id": "already-has-external-subtitle",
+      "enabled": true
+    },
+    {
+      "id": "no-source-track",
+      "enabled": true
+    },
+    {
+      "id": "image-based-subtitle",
+      "enabled": true
+    },
+    {
+      "id": "file-too-large",
+      "enabled": false
+    },
+    {
+      "id": "path-contains",
+      "enabled": true
+    }
+  ]
+}

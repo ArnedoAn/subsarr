@@ -173,28 +173,35 @@ export default function LibraryPage() {
       </header>
 
       {/* Filters Toolbar */}
-      <div className="bg-surface-container rounded-xl p-6">
-        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div className="grid w-full gap-3 sm:grid-cols-2 lg:grid-cols-5">
-            {/* Folder Filter */}
-            <div className="relative">
-              <select
-                value={folderFilter}
-                onChange={(event) => {
-                  setFolderFilter(event.target.value);
-                  setCurrentPage(1);
-                }}
-                className="w-full engraved-input rounded-lg px-4 py-3 pr-10 text-sm text-on-surface appearance-none bg-surface-container-lowest cursor-pointer transition-all duration-200"
-              >
-                <option value="all">All Folders</option>
-                {folders.map(folder => (
-                  <option key={folder} value={folder}>{folder}</option>
-                ))}
-              </select>
-              <span className="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 text-on-surface-variant pointer-events-none">
-                folder
-              </span>
-            </div>
+      <div className="bg-surface-container rounded-xl p-4 md:p-6 space-y-4">
+        {/* Search and Filters */}
+        <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
+          {/* Folder Filter */}
+          <div className="relative sm:col-span-2 lg:col-span-1">
+            <select
+              value={folderFilter}
+              onChange={(event) => {
+                setFolderFilter(event.target.value);
+                setCurrentPage(1);
+              }}
+              className="w-full engraved-input rounded-lg px-4 py-3 pr-10 text-sm text-on-surface appearance-none bg-surface-container-lowest cursor-pointer transition-all duration-200"
+            >
+              <option value="all">All Folders</option>
+              {folders.map(folder => {
+                // Show only the last part of the path for readability
+                const shortName = folder.split('/').slice(-2).join('/');
+                return (
+                  <option key={folder} value={folder} title={folder}>{shortName}</option>
+                );
+              })}
+            </select>
+            <span className="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 text-on-surface-variant pointer-events-none">
+              folder
+            </span>
+          </div>
+          
+          {/* Search Input */}
+          <div className="relative sm:col-span-2 lg:col-span-1">
             <input
               value={query}
               onChange={(event) => {
@@ -202,112 +209,120 @@ export default function LibraryPage() {
                 setCurrentPage(1);
               }}
               placeholder="Search media files..."
-              className="w-full engraved-input rounded-lg px-4 py-3 text-sm text-on-surface"
+              className="w-full engraved-input rounded-lg px-4 py-3 pl-10 text-sm text-on-surface"
             />
-            <div className="relative">
-              <select
-                value={statusFilter}
-                onChange={(event) => {
-                  setStatusFilter(event.target.value as 'all' | 'ready' | 'skipped' | 'no-source');
-                  setCurrentPage(1);
-                }}
-                className="w-full engraved-input rounded-lg px-4 py-3 pr-10 text-sm text-on-surface appearance-none bg-surface-container-lowest cursor-pointer transition-all duration-200"
-              >
-                <option value="all">All statuses</option>
-                <option value="ready">Ready</option>
-                <option value="skipped">Skipped</option>
-                <option value="no-source">No source track</option>
-              </select>
-              <span className="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 text-on-surface-variant pointer-events-none">
-                expand_more
-              </span>
-            </div>
-            <input
-              value={targetLanguageFilter}
-              onChange={(event) => setTargetLanguageFilter(event.target.value)}
-              placeholder="Target language"
-              className="w-full engraved-input rounded-lg px-4 py-3 text-sm text-on-surface"
-            />
-            <label className="flex items-center gap-3 engraved-input rounded-lg px-4 py-3 text-sm text-on-surface-variant cursor-pointer">
-              <input
-                type="checkbox"
-                checked={missingTargetOnly}
-                onChange={(event) => {
-                  setMissingTargetOnly(event.target.checked);
-                  setCurrentPage(1);
-                }}
-                className="h-4 w-4 accent-primary"
-              />
-              Missing target only
-            </label>
+            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant pointer-events-none text-[18px]">
+              search
+            </span>
           </div>
-          <div className="flex gap-3 items-center flex-shrink-0">
-            {selectedItems.length > 0 && (
-              <div className="flex items-center gap-2 mr-2">
-                <div className="relative">
-                  <select
-                    value={batchSource}
-                    onChange={(e) => setBatchSource(e.target.value)}
-                    className="engraved-input rounded-lg px-3 py-2 pr-8 text-xs text-on-surface appearance-none bg-surface-container-lowest cursor-pointer transition-all duration-200"
-                    title="Source Language for Batch Translate"
-                  >
-                    {COMMON_LANGUAGES.map((lang) => (
-                      <option key={`batch-src-${lang.code}`} value={lang.code}>
-                        {lang.code.toUpperCase()}
-                      </option>
-                    ))}
-                  </select>
-                  <span className="material-symbols-outlined absolute right-2 top-1/2 -translate-y-1/2 text-on-surface-variant pointer-events-none text-[16px]">
-                    expand_more
-                  </span>
-                </div>
-                <span className="material-symbols-outlined text-on-surface-variant text-[16px]">arrow_forward</span>
-                <div className="relative">
-                  <select
-                    value={batchTarget}
-                    onChange={(e) => setBatchTarget(e.target.value)}
-                    className="engraved-input rounded-lg px-3 py-2 pr-8 text-xs text-on-surface appearance-none bg-surface-container-lowest cursor-pointer transition-all duration-200"
-                    title="Target Language for Batch Translate"
-                  >
-                    {COMMON_LANGUAGES.map((lang) => (
-                      <option key={`batch-tgt-${lang.code}`} value={lang.code}>
-                        {lang.code.toUpperCase()}
-                      </option>
-                    ))}
-                  </select>
-                  <span className="material-symbols-outlined absolute right-2 top-1/2 -translate-y-1/2 text-on-surface-variant pointer-events-none text-[16px]">
-                    expand_more
-                  </span>
-                </div>
-                <span className="material-symbols-outlined text-on-surface-variant text-[16px]">arrow_forward</span>
-                <div className="relative">
-                  <select
-                    value={batchProvider}
-                    onChange={(e) => setBatchProvider(e.target.value as 'openrouter' | 'deepseek')}
-                    className="engraved-input rounded-lg px-3 py-2 pr-8 text-xs text-on-surface appearance-none bg-surface-container-lowest cursor-pointer transition-all duration-200"
-                    title="Provider for Batch Translate"
-                  >
-                    <option value="openrouter">OpenRouter (Free)</option>
-                    <option value="deepseek">DeepSeek (Paid)</option>
-                  </select>
-                  <span className="material-symbols-outlined absolute right-2 top-1/2 -translate-y-1/2 text-on-surface-variant pointer-events-none text-[16px]">
-                    expand_more
-                  </span>
-                </div>
+          
+          {/* Status Filter */}
+          <div className="relative">
+            <select
+              value={statusFilter}
+              onChange={(event) => {
+                setStatusFilter(event.target.value as 'all' | 'ready' | 'skipped' | 'no-source');
+                setCurrentPage(1);
+              }}
+              className="w-full engraved-input rounded-lg px-4 py-3 pr-10 text-sm text-on-surface appearance-none bg-surface-container-lowest cursor-pointer transition-all duration-200"
+            >
+              <option value="all">All statuses</option>
+              <option value="ready">Ready</option>
+              <option value="skipped">Skipped</option>
+              <option value="no-source">No source track</option>
+            </select>
+            <span className="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 text-on-surface-variant pointer-events-none">
+              expand_more
+            </span>
+          </div>
+          
+          {/* Target Language */}
+          <input
+            value={targetLanguageFilter}
+            onChange={(event) => setTargetLanguageFilter(event.target.value)}
+            placeholder="Target language"
+            className="w-full engraved-input rounded-lg px-4 py-3 text-sm text-on-surface"
+          />
+          
+          {/* Missing Target Checkbox */}
+          <label className="flex items-center gap-3 engraved-input rounded-lg px-4 py-3 text-sm text-on-surface-variant cursor-pointer whitespace-nowrap">
+            <input
+              type="checkbox"
+              checked={missingTargetOnly}
+              onChange={(event) => {
+                setMissingTargetOnly(event.target.checked);
+                setCurrentPage(1);
+              }}
+              className="h-4 w-4 accent-primary flex-shrink-0"
+            />
+            <span className="truncate">Missing target only</span>
+          </label>
+        </div>
+
+        {/* Actions Row */}
+        <div className="flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between pt-2 border-t border-cyan-400/10">
+          {/* Batch Translation Controls */}
+          {selectedItems.length > 0 ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-on-surface-variant font-medium">Batch:</span>
+              <div className="flex items-center gap-1 bg-surface-container-high rounded-lg p-1">
+                <select
+                  value={batchSource}
+                  onChange={(e) => setBatchSource(e.target.value)}
+                  className="bg-transparent px-2 py-1.5 text-xs text-on-surface cursor-pointer focus:outline-none"
+                  title="Source Language"
+                >
+                  {COMMON_LANGUAGES.map((lang) => (
+                    <option key={`batch-src-${lang.code}`} value={lang.code}>
+                      {lang.code.toUpperCase()}
+                    </option>
+                  ))}
+                </select>
+                <span className="material-symbols-outlined text-on-surface-variant text-[14px]">arrow_forward</span>
+                <select
+                  value={batchTarget}
+                  onChange={(e) => setBatchTarget(e.target.value)}
+                  className="bg-transparent px-2 py-1.5 text-xs text-on-surface cursor-pointer focus:outline-none"
+                  title="Target Language"
+                >
+                  {COMMON_LANGUAGES.map((lang) => (
+                    <option key={`batch-tgt-${lang.code}`} value={lang.code}>
+                      {lang.code.toUpperCase()}
+                    </option>
+                  ))}
+                </select>
               </div>
-            )}
+              <select
+                value={batchProvider}
+                onChange={(e) => setBatchProvider(e.target.value as 'openrouter' | 'deepseek')}
+                className="engraved-input rounded-lg px-2 py-1.5 text-xs text-on-surface appearance-none bg-surface-container-lowest cursor-pointer"
+                title="Provider"
+              >
+                <option value="openrouter">OpenRouter</option>
+                <option value="deepseek">DeepSeek</option>
+              </select>
+            </div>
+          ) : (
+            <div className="text-xs text-on-surface-variant">Select items to enable batch translation</div>
+          )}
+          
+          {/* Action Buttons */}
+          <div className="flex gap-2 flex-shrink-0">
             <button
               onClick={() => void load()}
-              className="bg-surface-container-high px-4 py-2.5 rounded text-xs font-bold tracking-widest text-on-surface hover:bg-surface-variant transition-colors"
+              className="bg-surface-container-high px-4 py-2.5 rounded text-xs font-bold tracking-widest text-on-surface hover:bg-surface-variant transition-colors flex items-center gap-2"
             >
-              RESCAN
+              <span className="material-symbols-outlined text-[16px]">refresh</span>
+              <span className="hidden sm:inline">RESCAN</span>
             </button>
             <button
               onClick={() => void translateSelected()}
               disabled={selectedItems.length === 0}
-              className="bg-gradient-to-br from-primary to-primary-container px-6 py-2.5 rounded text-xs font-black tracking-widest text-on-primary-container shadow-[0_0_15px_rgba(47,217,244,0.3)] hover:brightness-110 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              className="bg-gradient-to-br from-primary to-primary-container px-4 sm:px-6 py-2.5 rounded text-xs font-black tracking-widest text-on-primary-container shadow-[0_0_15px_rgba(47,217,244,0.3)] hover:brightness-110 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
             >
-              TRANSLATE {selectedItems.length > 0 ? `(${selectedItems.length})` : ''}
+              <span className="material-symbols-outlined text-[16px]">translate</span>
+              <span className="hidden sm:inline">TRANSLATE</span>
+              {selectedItems.length > 0 && <span>({selectedItems.length})</span>}
             </button>
           </div>
         </div>
@@ -315,35 +330,38 @@ export default function LibraryPage() {
 
       {/* Media Table */}
       <div className="bg-surface-container rounded-xl overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm min-w-[800px]">
+        {/* Desktop Table View */}
+        <div className="hidden md:block overflow-x-auto">
+          <table className="w-full text-left text-sm min-w-[700px]">
             <thead className="bg-surface-container-low border-b border-cyan-400/15">
               <tr>
-                <th className="px-6 py-4 text-xs font-bold uppercase tracking-widest text-on-surface-variant w-12">Select</th>
-                <th className="px-6 py-4 text-xs font-bold uppercase tracking-widest text-on-surface-variant">File</th>
-                <th className="px-6 py-4 text-xs font-bold uppercase tracking-widest text-on-surface-variant">Tracks</th>
-                <th className="px-6 py-4 text-xs font-bold uppercase tracking-widest text-on-surface-variant">Status</th>
-                <th className="px-6 py-4 text-xs font-bold uppercase tracking-widest text-on-surface-variant w-24">Action</th>
+                <th className="px-4 py-3 text-xs font-bold uppercase tracking-widest text-on-surface-variant w-12">
+                  <span className="sr-only">Select</span>
+                </th>
+                <th className="px-4 py-3 text-xs font-bold uppercase tracking-widest text-on-surface-variant">File</th>
+                <th className="px-4 py-3 text-xs font-bold uppercase tracking-widest text-on-surface-variant">Tracks</th>
+                <th className="px-4 py-3 text-xs font-bold uppercase tracking-widest text-on-surface-variant">Status</th>
+                <th className="px-4 py-3 text-xs font-bold uppercase tracking-widest text-on-surface-variant w-24">Action</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center text-on-surface-variant">
+                  <td colSpan={5} className="px-4 py-12 text-center text-on-surface-variant">
                     Loading media library...
                   </td>
                 </tr>
               ) : null}
               {error ? (
                 <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center text-error">
+                  <td colSpan={5} className="px-4 py-12 text-center text-error">
                     {error}
                   </td>
                 </tr>
               ) : null}
               {!loading && !error && filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center text-on-surface-variant">
+                  <td colSpan={5} className="px-4 py-12 text-center text-on-surface-variant">
                     No media items found.
                   </td>
                 </tr>
@@ -366,7 +384,7 @@ export default function LibraryPage() {
                       index % 2 === 0 ? 'bg-surface-container' : 'bg-surface-container-low'
                     } hover:bg-primary/5`}
                   >
-                    <td className="px-6 py-4 align-top">
+                    <td className="px-4 py-3 align-top">
                       <input
                         type="checkbox"
                         checked={isSelected}
@@ -374,12 +392,12 @@ export default function LibraryPage() {
                         className="h-4 w-4 accent-primary"
                       />
                     </td>
-                    <td className="px-6 py-4 align-top">
-                      <div className="flex items-center gap-2">
-                        <p className="font-medium text-on-surface">{item.name}</p>
+                    <td className="px-4 py-3 align-top max-w-[300px]">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="font-medium text-on-surface truncate">{item.name}</p>
                         {hasTargetLanguage && (
                           <span 
-                            className="bg-primary/20 text-primary px-2 py-0.5 rounded text-[10px] font-bold tracking-widest flex items-center gap-1"
+                            className="bg-primary/20 text-primary px-2 py-0.5 rounded text-[10px] font-bold tracking-widest flex items-center gap-1 flex-shrink-0"
                             title={`Already has ${target.toUpperCase()} subtitles`}
                           >
                             <span className="material-symbols-outlined text-[12px]">done_all</span>
@@ -387,42 +405,44 @@ export default function LibraryPage() {
                           </span>
                         )}
                       </div>
-                      <p className="mt-1 text-xs font-mono text-on-surface-variant">{item.path}</p>
+                      <p className="mt-1 text-xs font-mono text-on-surface-variant truncate" title={item.path}>{item.path}</p>
                       
                       {item.externalSubtitles.length > 0 && (
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          {item.externalSubtitles.map((sub, idx) => (
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {item.externalSubtitles.slice(0, 3).map((sub, idx) => (
                             <span
                               key={`ext-${item.id}-${idx}`}
-                              className="bg-surface-variant/50 text-on-surface-variant border border-on-surface-variant/20 px-2 py-1 rounded text-[10px] font-mono flex items-center gap-1"
+                              className="bg-surface-variant/50 text-on-surface-variant border border-on-surface-variant/20 px-1.5 py-0.5 rounded text-[9px] font-mono"
                             >
-                              <span className="material-symbols-outlined text-[12px]">description</span>
-                              {sub.language.toUpperCase()} {sub.forced ? '(Forced)' : ''}
+                              {sub.language.toUpperCase()}{sub.forced ? ' F' : ''}
                             </span>
                           ))}
+                          {item.externalSubtitles.length > 3 && (
+                            <span className="text-[9px] text-on-surface-variant">+{item.externalSubtitles.length - 3}</span>
+                          )}
                         </div>
                       )}
                     </td>
-                    <td className="px-6 py-4 align-top">
-                      <div className="flex flex-wrap gap-2">
+                    <td className="px-4 py-3 align-top">
+                      <div className="flex flex-wrap gap-1">
                         {item.subtitleTracks.slice(0, 2).map((track) => (
                           <span
                             key={`${item.id}-${track.index}`}
-                            className="bg-surface-container-high px-3 py-1.5 rounded-md text-[10px] font-mono text-on-surface-variant"
+                            className="bg-surface-container-high px-2 py-1 rounded text-[9px] font-mono text-on-surface-variant"
                           >
-                            {track.language} · {track.codec}
+                            {track.language}
                           </span>
                         ))}
                         {item.subtitleTracks.length > 2 && (
-                          <span className="bg-primary/10 text-primary px-2 py-1.5 rounded-md text-[10px] font-bold tracking-widest">
-                            +{item.subtitleTracks.length - 2} more
+                          <span className="bg-primary/10 text-primary px-1.5 py-1 rounded text-[9px] font-bold">
+                            +{item.subtitleTracks.length - 2}
                           </span>
                         )}
                       </div>
                     </td>
-                    <td className="px-6 py-4 align-top">
+                    <td className="px-4 py-3 align-top">
                       <span
-                        className={`badge ${
+                        className={`badge text-[10px] ${
                           statusLabel === 'Ready'
                             ? 'badge-success'
                             : statusLabel === 'Skipped'
@@ -432,17 +452,13 @@ export default function LibraryPage() {
                       >
                         {statusLabel}
                       </span>
-                      {item.ruleStatus?.skip && item.ruleStatus.reason ? (
-                        <p className="mt-2 text-xs text-on-surface-variant">{item.ruleStatus.reason}</p>
-                      ) : null}
                     </td>
-                    <td className="px-6 py-4 align-top">
+                    <td className="px-4 py-3 align-top">
                       <Link
                         href={`/library/${item.id}`}
-                        className="inline-flex items-center gap-1 bg-surface-container-high px-3 py-1.5 rounded text-[10px] font-bold tracking-widest text-on-surface hover:bg-surface-variant transition-colors"
+                        className="inline-flex items-center gap-1 bg-surface-container-high px-2 py-1 rounded text-[10px] font-bold tracking-widest text-on-surface hover:bg-surface-variant transition-colors"
                       >
                         <span className="material-symbols-outlined text-sm">search</span>
-                        INSPECT
                       </Link>
                     </td>
                   </tr>
@@ -450,6 +466,106 @@ export default function LibraryPage() {
               })}
             </tbody>
           </table>
+        </div>
+
+        {/* Mobile Card View */}
+        <div className="md:hidden divide-y divide-cyan-400/10">
+          {loading && (
+            <div className="px-4 py-12 text-center text-on-surface-variant">
+              Loading media library...
+            </div>
+          )}
+          {error && (
+            <div className="px-4 py-12 text-center text-error">
+              {error}
+            </div>
+          )}
+          {!loading && !error && filtered.length === 0 && (
+            <div className="px-4 py-12 text-center text-on-surface-variant">
+              No media items found.
+            </div>
+          )}
+          {paginatedItems.map((item) => {
+            const status = item.ruleStatus?.skip ? 'Skipped' : 'Ready';
+            const hasSource = item.subtitleTracks.length > 0;
+            const statusLabel = hasSource ? status : 'No source';
+            const isSelected = Boolean(selected[item.id]);
+
+            const target = targetLanguageFilter.toLowerCase();
+            const hasTargetEmbedded = item.subtitleTracks.some((track) => track.language === target);
+            const hasTargetExternal = item.externalSubtitles.some((subtitle) => subtitle.language === target);
+            const hasTargetLanguage = hasTargetEmbedded || hasTargetExternal;
+
+            return (
+              <div key={item.id} className="p-4 bg-surface-container hover:bg-primary/5 transition-colors">
+                <div className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => toggleSelection(item.id)}
+                    className="h-4 w-4 accent-primary mt-1 flex-shrink-0"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <p className="font-medium text-on-surface text-sm truncate">{item.name}</p>
+                        <p className="text-xs font-mono text-on-surface-variant truncate mt-0.5">{item.path}</p>
+                      </div>
+                      <Link
+                        href={`/library/${item.id}`}
+                        className="flex-shrink-0 bg-surface-container-high p-2 rounded hover:bg-surface-variant transition-colors"
+                      >
+                        <span className="material-symbols-outlined text-[18px] text-on-surface">search</span>
+                      </Link>
+                    </div>
+                    
+                    <div className="flex flex-wrap items-center gap-2 mt-3">
+                      <span
+                        className={`badge text-[10px] ${
+                          statusLabel === 'Ready'
+                            ? 'badge-success'
+                            : statusLabel === 'Skipped'
+                              ? 'badge-secondary'
+                              : 'badge-error'
+                        }`}
+                      >
+                        {statusLabel}
+                      </span>
+                      
+                      {hasTargetLanguage && (
+                        <span className="bg-primary/20 text-primary px-2 py-0.5 rounded text-[10px] font-bold flex items-center gap-1">
+                          <span className="material-symbols-outlined text-[12px]">done_all</span>
+                          {target.toUpperCase()}
+                        </span>
+                      )}
+                      
+                      {item.subtitleTracks.length > 0 && (
+                        <div className="flex items-center gap-1">
+                          {item.subtitleTracks.slice(0, 2).map((track) => (
+                            <span
+                              key={`${item.id}-${track.index}`}
+                              className="bg-surface-container-high px-1.5 py-0.5 rounded text-[9px] font-mono text-on-surface-variant"
+                            >
+                              {track.language}
+                            </span>
+                          ))}
+                          {item.subtitleTracks.length > 2 && (
+                            <span className="text-[9px] text-primary font-bold">+{item.subtitleTracks.length - 2}</span>
+                          )}
+                        </div>
+                      )}
+                      
+                      {item.externalSubtitles.length > 0 && (
+                        <span className="text-[9px] text-on-surface-variant">
+                          {item.externalSubtitles.length} ext
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
         </div>
 
         {/* Pagination Controls */}
