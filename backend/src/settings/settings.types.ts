@@ -13,6 +13,7 @@ export interface RuntimeSettings {
   concurrency: number;
   pathContainsExclusions: string[];
   fileTooLargeBytes?: number;
+  translationVerificationEnabled: boolean;
   rules: RuleToggleConfig[];
 }
 
@@ -26,6 +27,7 @@ export interface PublicSettings {
   concurrency: number;
   pathContainsExclusions: string[];
   fileTooLargeBytes?: number;
+  translationVerificationEnabled: boolean;
   rules: RuleToggleConfig[];
 }
 
@@ -39,5 +41,6 @@ export interface UpdateSettingsInput {
   concurrency: number;
   pathContainsExclusions: string[];
   fileTooLargeBytes?: number;
+  translationVerificationEnabled: boolean;
   rules: RuleToggleConfig[];
 }

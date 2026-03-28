@@ -128,7 +128,7 @@ export default function JobsPage() {
       </div>
 
       {/* Jobs Table */}
-      <div className="bg-surface-container rounded-xl overflow-hidden">
+      <div className="bg-surface-container rounded-xl">
         <div className="p-6 border-b border-cyan-400/15">
           <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <h2 className="text-lg font-headline font-bold text-on-surface">Live Job Monitor</h2>
@@ -168,135 +168,246 @@ export default function JobsPage() {
           </div>
         </div>
 
-        <table className="w-full text-left text-sm">
-          <thead className="bg-surface-container-low">
-            <tr>
-              <th className="px-6 py-4 text-xs font-bold uppercase tracking-widest text-on-surface-variant">Filename</th>
-              <th className="px-6 py-4 text-xs font-bold uppercase tracking-widest text-on-surface-variant">Languages</th>
-              <th className="px-6 py-4 text-xs font-bold uppercase tracking-widest text-on-surface-variant">Progress</th>
-              <th className="px-6 py-4 text-xs font-bold uppercase tracking-widest text-on-surface-variant">Phase</th>
-              <th className="px-6 py-4 text-xs font-bold uppercase tracking-widest text-on-surface-variant">Usage</th>
-              <th className="px-6 py-4 text-xs font-bold uppercase tracking-widest text-on-surface-variant">Elapsed</th>
-              <th className="px-6 py-4 text-xs font-bold uppercase tracking-widest text-on-surface-variant">Status</th>
-              <th className="px-6 py-4 text-xs font-bold uppercase tracking-widest text-on-surface-variant w-32">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filteredJobs.map((job, index) => {
-              const live = liveEvents[String(job.id)];
-              const progress =
-                live?.progressPercent ?? Number(job.progress ?? 0);
-              const phase = live?.phase ?? job.state;
-              const elapsedMs =
-                job.processedAt && !job.finishedAt
-                  ? now - job.processedAt
-                  : job.processedAt && job.finishedAt
-                    ? job.finishedAt - job.processedAt
-                    : 0;
-              const filename =
-                job.data.mediaItemPath.split(/[\\/]/).pop() ??
-                job.data.mediaItemPath;
+        {/* Desktop Table View */}
+        <div className="hidden md:block overflow-x-auto">
+          <table className="w-full text-left text-sm min-w-[900px]">
+            <thead className="bg-surface-container-low">
+              <tr>
+                <th className="px-6 py-4 text-xs font-bold uppercase tracking-widest text-on-surface-variant">Filename</th>
+                <th className="px-6 py-4 text-xs font-bold uppercase tracking-widest text-on-surface-variant">Languages</th>
+                <th className="px-6 py-4 text-xs font-bold uppercase tracking-widest text-on-surface-variant">Progress</th>
+                <th className="px-6 py-4 text-xs font-bold uppercase tracking-widest text-on-surface-variant">Phase</th>
+                <th className="px-6 py-4 text-xs font-bold uppercase tracking-widest text-on-surface-variant">Usage</th>
+                <th className="px-6 py-4 text-xs font-bold uppercase tracking-widest text-on-surface-variant">Elapsed</th>
+                <th className="px-6 py-4 text-xs font-bold uppercase tracking-widest text-on-surface-variant">Status</th>
+                <th className="px-6 py-4 text-xs font-bold uppercase tracking-widest text-on-surface-variant w-32">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredJobs.map((job, index) => {
+                const live = liveEvents[String(job.id)];
+                const progress =
+                  live?.progressPercent ?? Number(job.progress ?? 0);
+                const phase = live?.phase ?? job.state;
+                const elapsedMs =
+                  job.processedAt && !job.finishedAt
+                    ? now - job.processedAt
+                    : job.processedAt && job.finishedAt
+                      ? job.finishedAt - job.processedAt
+                      : 0;
+                const filename =
+                  job.data.mediaItemPath.split(/[\\/]/).pop() ??
+                  job.data.mediaItemPath;
 
-              return (
-                <Fragment key={String(job.id)}>
-                  <tr
-                    className={`border-b border-cyan-400/10 transition-colors ${
-                      index % 2 === 0 ? 'bg-surface-container' : 'bg-surface-container-low'
-                    } hover:bg-primary/5`}
-                  >
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-2">
-                        {job.state === 'active' ? (
-                          <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-primary" />
-                        ) : null}
-                        <span className="font-medium text-on-surface">{filename}</span>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 text-on-surface-variant">
-                      {job.data.sourceLanguage.toUpperCase()} →{' '}
-                      {job.data.targetLanguage.toUpperCase()}
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="h-2 w-36 overflow-hidden rounded-full bg-surface-container-highest">
-                        <div
-                          className="h-full bg-primary transition-all"
-                          style={{
-                            width: `${Math.min(Math.max(progress, 0), 100)}%`,
-                          }}
-                        />
-                      </div>
-                      <p className="mt-1 text-xs text-on-surface-variant">{progress}%</p>
-                    </td>
-                    <td className="px-6 py-4 text-on-surface-variant">
-                      <PhaseBadge phase={phase} />
-                    </td>
-                    <td className="px-6 py-4 text-on-surface-variant font-mono text-xs">
-                      {job.returnValue?.usage.totalTokens ?? 0} tokens
-                    </td>
-                    <td className="px-6 py-4 text-on-surface-variant font-mono text-xs">{formatElapsed(elapsedMs)}</td>
-                    <td className="px-6 py-4">
-                      <span
-                        className={`badge ${
-                          job.state === 'completed'
-                            ? 'badge-success'
-                            : job.state === 'failed'
-                              ? 'badge-error'
-                              : job.state === 'active'
-                                ? 'badge-primary'
-                                : 'badge-secondary'
-                        }`}
-                      >
-                        {job.state}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-2">
-                        {job.state === 'waiting' || job.state === 'active' || job.state === 'failed' ? (
-                          <button
-                            onClick={() => void cancel(job.id)}
-                            className="bg-error/10 text-error border border-error/30 px-3 py-1.5 rounded text-[10px] font-bold tracking-widest hover:bg-error/20 transition-colors"
-                          >
-                            {job.state === 'failed' ? 'DELETE' : 'CANCEL'}
-                          </button>
-                        ) : null}
-                        {job.state === 'failed' ? (
-                          <button
-                            onClick={() =>
-                              setExpandedFailure((previous) => ({
-                                ...previous,
-                                [String(job.id)]: !previous[String(job.id)],
-                              }))
-                            }
-                            className="bg-error/10 text-error border border-error/30 px-3 py-1.5 rounded text-[10px] font-bold tracking-widest hover:bg-error/20 transition-colors"
-                          >
-                            {expandedFailure[String(job.id)]
-                              ? 'HIDE'
-                              : 'ERROR'}
-                          </button>
-                        ) : null}
-                        <Link
-                          href={`/archive?jobId=${job.id}`}
-                          className="bg-surface-container-high text-on-surface px-3 py-1.5 rounded text-[10px] font-bold tracking-widest hover:bg-surface-variant transition-colors"
+                return (
+                  <Fragment key={String(job.id)}>
+                    <tr
+                      className={`border-b border-cyan-400/10 transition-colors ${
+                        index % 2 === 0 ? 'bg-surface-container' : 'bg-surface-container-low'
+                      } hover:bg-primary/5`}
+                    >
+                      <td className="px-6 py-4 max-w-[220px]">
+                        <div className="flex items-center gap-2 min-w-0">
+                          {job.state === 'active' ? (
+                            <span className="inline-block h-2 w-2 flex-shrink-0 animate-pulse rounded-full bg-primary" />
+                          ) : null}
+                          <span className="font-medium text-on-surface truncate" title={filename}>{filename}</span>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 text-on-surface-variant whitespace-nowrap">
+                        {job.data.sourceLanguage.toUpperCase()} →{' '}
+                        {job.data.targetLanguage.toUpperCase()}
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="h-2 w-36 overflow-hidden rounded-full bg-surface-container-highest">
+                          <div
+                            className="h-full bg-primary transition-all"
+                            style={{
+                              width: `${Math.min(Math.max(progress, 0), 100)}%`,
+                            }}
+                          />
+                        </div>
+                        <p className="mt-1 text-xs text-on-surface-variant">{progress}%</p>
+                      </td>
+                      <td className="px-6 py-4 text-on-surface-variant">
+                        <PhaseBadge phase={phase} />
+                      </td>
+                      <td className="px-6 py-4 text-on-surface-variant font-mono text-xs whitespace-nowrap">
+                        {job.returnValue?.usage.totalTokens ?? 0} tokens
+                      </td>
+                      <td className="px-6 py-4 text-on-surface-variant font-mono text-xs whitespace-nowrap">{formatElapsed(elapsedMs)}</td>
+                      <td className="px-6 py-4">
+                        <span
+                          className={`badge ${
+                            job.state === 'completed'
+                              ? 'badge-success'
+                              : job.state === 'failed'
+                                ? 'badge-error'
+                                : job.state === 'active'
+                                  ? 'badge-primary'
+                                  : 'badge-secondary'
+                          }`}
                         >
-                          LOGS
-                        </Link>
-                      </div>
-                    </td>
-                  </tr>
-                  {job.state === 'failed' && expandedFailure[String(job.id)] ? (
-                    <tr className="border-b border-cyan-400/10">
-                      <td colSpan={8} className="px-6 py-4 bg-surface-container-low">
-                        <pre className="overflow-x-auto rounded-lg bg-surface-container-lowest p-4 text-xs font-mono text-error">
-                          {job.failedReason ?? 'No error details'}
-                        </pre>
+                          {job.state}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-2">
+                          {job.state === 'waiting' || job.state === 'active' || job.state === 'failed' ? (
+                            <button
+                              onClick={() => void cancel(job.id)}
+                              className="bg-error/10 text-error border border-error/30 px-3 py-1.5 rounded text-[10px] font-bold tracking-widest hover:bg-error/20 transition-colors"
+                            >
+                              {job.state === 'failed' ? 'DELETE' : 'CANCEL'}
+                            </button>
+                          ) : null}
+                          {job.state === 'failed' ? (
+                            <button
+                              onClick={() =>
+                                setExpandedFailure((previous) => ({
+                                  ...previous,
+                                  [String(job.id)]: !previous[String(job.id)],
+                                }))
+                              }
+                              className="bg-error/10 text-error border border-error/30 px-3 py-1.5 rounded text-[10px] font-bold tracking-widest hover:bg-error/20 transition-colors"
+                            >
+                              {expandedFailure[String(job.id)]
+                                ? 'HIDE'
+                                : 'ERROR'}
+                            </button>
+                          ) : null}
+                          <Link
+                            href={`/archive?jobId=${job.id}`}
+                            className="bg-surface-container-high text-on-surface px-3 py-1.5 rounded text-[10px] font-bold tracking-widest hover:bg-surface-variant transition-colors"
+                          >
+                            LOGS
+                          </Link>
+                        </div>
                       </td>
                     </tr>
+                    {job.state === 'failed' && expandedFailure[String(job.id)] ? (
+                      <tr className="border-b border-cyan-400/10">
+                        <td colSpan={8} className="px-6 py-4 bg-surface-container-low">
+                          <pre className="overflow-x-auto rounded-lg bg-surface-container-lowest p-4 text-xs font-mono text-error">
+                            {job.failedReason ?? 'No error details'}
+                          </pre>
+                        </td>
+                      </tr>
+                    ) : null}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Mobile Card View */}
+        <div className="md:hidden divide-y divide-cyan-400/10">
+          {filteredJobs.map((job) => {
+            const live = liveEvents[String(job.id)];
+            const progress =
+              live?.progressPercent ?? Number(job.progress ?? 0);
+            const phase = live?.phase ?? job.state;
+            const elapsedMs =
+              job.processedAt && !job.finishedAt
+                ? now - job.processedAt
+                : job.processedAt && job.finishedAt
+                  ? job.finishedAt - job.processedAt
+                  : 0;
+            const filename =
+              job.data.mediaItemPath.split(/[\\/]/).pop() ??
+              job.data.mediaItemPath;
+
+            return (
+              <div key={String(job.id)} className="p-4 bg-surface-container hover:bg-primary/5 transition-colors">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 min-w-0">
+                      {job.state === 'active' ? (
+                        <span className="inline-block h-2 w-2 flex-shrink-0 animate-pulse rounded-full bg-primary" />
+                      ) : null}
+                      <p className="font-medium text-on-surface text-sm truncate" title={filename}>{filename}</p>
+                    </div>
+                    <p className="text-xs text-on-surface-variant mt-1">
+                      {job.data.sourceLanguage.toUpperCase()} → {job.data.targetLanguage.toUpperCase()}
+                    </p>
+                  </div>
+                  <span
+                    className={`badge text-[10px] flex-shrink-0 ${
+                      job.state === 'completed'
+                        ? 'badge-success'
+                        : job.state === 'failed'
+                          ? 'badge-error'
+                          : job.state === 'active'
+                            ? 'badge-primary'
+                            : 'badge-secondary'
+                    }`}
+                  >
+                    {job.state}
+                  </span>
+                </div>
+
+                <div className="mt-3 flex items-center gap-3">
+                  <div className="flex-1">
+                    <div className="h-2 overflow-hidden rounded-full bg-surface-container-highest">
+                      <div
+                        className="h-full bg-primary transition-all"
+                        style={{ width: `${Math.min(Math.max(progress, 0), 100)}%` }}
+                      />
+                    </div>
+                  </div>
+                  <span className="text-xs text-on-surface-variant font-mono flex-shrink-0">{progress}%</span>
+                </div>
+
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <PhaseBadge phase={phase} />
+                  <span className="text-[10px] text-on-surface-variant font-mono">{formatElapsed(elapsedMs)}</span>
+                  {(job.returnValue?.usage.totalTokens ?? 0) > 0 && (
+                    <span className="text-[10px] text-on-surface-variant font-mono">
+                      {job.returnValue?.usage.totalTokens} tok
+                    </span>
+                  )}
+                </div>
+
+                <div className="mt-3 flex items-center gap-2">
+                  {job.state === 'waiting' || job.state === 'active' || job.state === 'failed' ? (
+                    <button
+                      onClick={() => void cancel(job.id)}
+                      className="bg-error/10 text-error border border-error/30 px-3 py-1.5 rounded text-[10px] font-bold tracking-widest hover:bg-error/20 transition-colors"
+                    >
+                      {job.state === 'failed' ? 'DELETE' : 'CANCEL'}
+                    </button>
                   ) : null}
-                </Fragment>
-              );
-            })}
-          </tbody>
-        </table>
+                  {job.state === 'failed' ? (
+                    <button
+                      onClick={() =>
+                        setExpandedFailure((previous) => ({
+                          ...previous,
+                          [String(job.id)]: !previous[String(job.id)],
+                        }))
+                      }
+                      className="bg-error/10 text-error border border-error/30 px-3 py-1.5 rounded text-[10px] font-bold tracking-widest hover:bg-error/20 transition-colors"
+                    >
+                      {expandedFailure[String(job.id)] ? 'HIDE' : 'ERROR'}
+                    </button>
+                  ) : null}
+                  <Link
+                    href={`/archive?jobId=${job.id}`}
+                    className="bg-surface-container-high text-on-surface px-3 py-1.5 rounded text-[10px] font-bold tracking-widest hover:bg-surface-variant transition-colors"
+                  >
+                    LOGS
+                  </Link>
+                </div>
+
+                {job.state === 'failed' && expandedFailure[String(job.id)] ? (
+                  <pre className="mt-3 overflow-x-auto rounded-lg bg-surface-container-lowest p-3 text-xs font-mono text-error">
+                    {job.failedReason ?? 'No error details'}
+                  </pre>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
 
         <div className="p-4 border-t border-cyan-400/15">
           <p className="text-xs text-on-surface-variant">

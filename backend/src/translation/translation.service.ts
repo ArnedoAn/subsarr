@@ -2,6 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import OpenAI from 'openai';
 import { OpenRouter } from '@openrouter/sdk';
 import type { ChatCompletion } from 'openai/resources';
+import {
+  TranslationVerificationService,
+  type FailedLine,
+} from './translation-verification.service';
 
 export type TranslationTier = 'free' | 'paid';
 
@@ -16,6 +20,14 @@ export interface TranslationResult {
   tierUsed: TranslationTier;
   usage: TranslationUsage;
   warnings: string[];
+  verification?: {
+    totalLines: number;
+    passedLines: number;
+    failedCount: number;
+    successRate: number;
+    retriedLines: number;
+    fixedByRetry: number;
+  };
 }
 
 interface BatchResult {
@@ -34,7 +46,9 @@ export class TranslationService {
   private readonly logger = new Logger(TranslationService.name);
   private consecutiveOpenRouterFailures = 0;
 
-  constructor() {}
+  constructor(
+    private readonly verificationService: TranslationVerificationService,
+  ) {}
 
   private async runWithConcurrency<T>(tasks: (() => Promise<T>)[], concurrency: number): Promise<T[]> {
     const results: T[] = new Array(tasks.length);
@@ -61,6 +75,8 @@ export class TranslationService {
     deepSeekApiKey: string,
     options?: {
       provider?: 'openrouter' | 'deepseek';
+      sourceLanguage?: string;
+      verificationEnabled?: boolean;
       onProgress?: (info: {
         batchIndex: number;
         totalBatches: number;
@@ -68,6 +84,7 @@ export class TranslationService {
         message: string;
         details?: any;
       }) => void;
+      onLogFailedLine?: (line: FailedLine) => void;
     }
   ): Promise<TranslationResult> {
     const output = [...lines];
@@ -138,6 +155,98 @@ export class TranslationService {
       }
     }
 
+    if (!options?.verificationEnabled) {
+      return {
+        lines: output,
+        tierUsed,
+        usage: {
+          promptTokens,
+          completionTokens,
+          totalTokens: promptTokens + completionTokens,
+        },
+        warnings,
+      };
+    }
+
+    const sourceLanguage = options.sourceLanguage ?? 'eng';
+    const verification = this.verificationService.verifyTranslation(
+      lines,
+      output,
+      sourceLanguage,
+      targetLanguage,
+    );
+
+    let retriedLines = 0;
+    let fixedByRetry = 0;
+
+    if (verification.failedLines.length > 0) {
+      this.logger.warn(
+        `Translation verification: ${verification.successRate}% success rate, ${verification.failedLines.length} failed lines`,
+      );
+
+      const MAX_RETRIES_PER_LINE = 2;
+      retriedLines = verification.failedLines.length;
+
+      for (const failed of verification.failedLines) {
+        if (options.onLogFailedLine) {
+          options.onLogFailedLine(failed);
+        }
+
+        let retrySuccess = false;
+        for (
+          let attempt = 1;
+          attempt <= MAX_RETRIES_PER_LINE && !retrySuccess;
+          attempt++
+        ) {
+          try {
+            const singleResult = await this.callLLM(
+              [lines[failed.index]],
+              targetLanguage,
+              openRouterApiKey,
+              deepSeekApiKey,
+              options.provider,
+            );
+
+            if (singleResult.translated.length === 1) {
+              const newTranslation = singleResult.translated[0];
+              const singleVerification =
+                this.verificationService.verifyTranslation(
+                  [lines[failed.index]],
+                  [newTranslation],
+                  sourceLanguage,
+                  targetLanguage,
+                );
+
+              if (singleVerification.failedLines.length === 0) {
+                output[failed.index] = newTranslation;
+                retrySuccess = true;
+                fixedByRetry++;
+                promptTokens += singleResult.usage.promptTokens;
+                completionTokens += singleResult.usage.completionTokens;
+                if (singleResult.tierUsed === 'paid') tierUsed = 'paid';
+                this.logger.log(
+                  `Line ${failed.index + 1} re-translated successfully on attempt ${attempt}`,
+                );
+              }
+            }
+          } catch (err) {
+            this.logger.warn(
+              `Re-translation attempt ${attempt} failed for line ${failed.index + 1}: ${err}`,
+            );
+          }
+        }
+
+        if (!retrySuccess) {
+          this.logger.warn(
+            `Line ${failed.index + 1} still failed after ${MAX_RETRIES_PER_LINE} retries`,
+          );
+        }
+      }
+    }
+
+    const finalFailedCount = verification.failedLines.length - fixedByRetry;
+    const finalPassedLines = lines.length - finalFailedCount;
+
     return {
       lines: output,
       tierUsed,
@@ -147,6 +256,17 @@ export class TranslationService {
         totalTokens: promptTokens + completionTokens,
       },
       warnings,
+      verification: {
+        totalLines: lines.length,
+        passedLines: finalPassedLines,
+        failedCount: finalFailedCount,
+        successRate:
+          lines.length > 0
+            ? Math.round((finalPassedLines / lines.length) * 10000) / 100
+            : 100,
+        retriedLines,
+        fixedByRetry,
+      },
     };
   }
 

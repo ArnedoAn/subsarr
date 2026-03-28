@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 
 export type JobLogLevel = 'info' | 'warn' | 'error';
@@ -26,6 +26,7 @@ const MAX_JOB_LOGS = 500;
 
 @Injectable()
 export class JobLogsService {
+  private readonly logger = new Logger('JobLogs');
   private readonly logsByJob = new Map<string, JobLogEntry[]>();
   private readonly globalLogs: JobLogEntry[] = [];
 
@@ -35,6 +36,16 @@ export class JobLogsService {
       id: randomUUID(),
       timestamp: new Date().toISOString(),
     };
+
+    const prefix = log.jobId ? `[Job ${log.jobId}]` : '[System]';
+    const text = `${prefix} [${log.phase}] ${log.message}`;
+    if (log.level === 'error') {
+      this.logger.error(text);
+    } else if (log.level === 'warn') {
+      this.logger.warn(text);
+    } else {
+      this.logger.log(text);
+    }
 
     this.globalLogs.push(log);
     if (this.globalLogs.length > MAX_GLOBAL_LOGS) {

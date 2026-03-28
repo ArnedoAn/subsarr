@@ -14,7 +14,9 @@ export class LibraryController {
 
   @Get()
   async list(@Query() query: LibraryQueryDto) {
-    this.logger.log(`GET /library called with includeRules=${query.includeRules}`);
+    this.logger.log(
+      `GET /library called with includeRules=${query.includeRules}`,
+    );
     try {
       const items = await this.libraryService.getLibrary(false);
       this.logger.log(`Library returned ${items.length} items`);
@@ -24,12 +26,7 @@ export class LibraryController {
         return items;
       }
 
-      return Promise.all(
-        items.map(async (item) => ({
-          ...item,
-          ruleStatus: await this.rulesService.evaluate(item),
-        })),
-      );
+      return this.attachRuleStatus(items);
     } catch (err) {
       this.logger.error(`Failed to get library: ${err}`);
       throw err;
@@ -52,17 +49,24 @@ export class LibraryController {
     try {
       const items = await this.libraryService.rescan();
       this.logger.log(`Rescan completed. Found ${items.length} items`);
-      
-      // Include rule evaluation like GET endpoint
-      return Promise.all(
-        items.map(async (item) => ({
-          ...item,
-          ruleStatus: await this.rulesService.evaluate(item),
-        })),
-      );
+      return this.attachRuleStatus(items);
     } catch (err) {
       this.logger.error(`Rescan failed: ${err}`);
       throw err;
     }
+  }
+
+  private async attachRuleStatus(items: readonly import('./media-item.entity').MediaItem[]) {
+    const definitions = await this.rulesService.getDefinitions();
+    const config = await this.rulesService.getTranslationConfig();
+
+    return items.map((item) => ({
+      ...item,
+      ruleStatus: this.rulesService.evaluateWithConfig(
+        item,
+        definitions,
+        config,
+      ),
+    }));
   }
 }

@@ -147,7 +147,14 @@ export class RulesService {
   ): Promise<SkipResult> {
     const definitions = await this.getDefinitions();
     const config = await this.getTranslationConfig(override);
+    return this.evaluateWithConfig(item, definitions, config);
+  }
 
+  evaluateWithConfig(
+    item: MediaItem,
+    definitions: RuleDefinition[],
+    config: TranslationConfig,
+  ): SkipResult {
     for (const rule of definitions) {
       if (!rule.enabled) {
         continue;
@@ -190,7 +197,7 @@ export class RulesService {
     });
   }
 
-  private async getTranslationConfig(
+  async getTranslationConfig(
     override?: Partial<TranslationConfig>,
   ): Promise<TranslationConfig> {
     const settings = await this.settingsService.getSettings();

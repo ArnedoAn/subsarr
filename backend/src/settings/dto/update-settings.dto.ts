@@ -1,6 +1,7 @@
 import {
   ArrayNotEmpty,
   IsArray,
+  IsBoolean,
   IsInt,
   IsOptional,
   IsString,
@@ -49,6 +50,9 @@ export class UpdateSettingsDto {
   @IsInt()
   @Min(1)
   fileTooLargeBytes?: number;
+
+  @IsBoolean()
+  translationVerificationEnabled!: boolean;
 
   @IsArray()
   @ValidateNested({ each: true })

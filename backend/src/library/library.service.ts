@@ -1,4 +1,9 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  type OnModuleInit,
+} from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import type { Dirent } from 'node:fs';
@@ -41,52 +46,99 @@ const MEDIA_EXTENSIONS = new Set([
   '.wmv',
 ]);
 const EXTERNAL_SUB_EXTENSIONS = new Set(['.srt', '.ass']);
+const FFPROBE_TIMEOUT_MS = 15_000;
+const PROBE_CONCURRENCY = 10;
 
 @Injectable()
-export class LibraryService {
+export class LibraryService implements OnModuleInit {
   private readonly logger = new Logger(LibraryService.name);
   private cache: CachedLibrary | null = null;
+  private scanPromise: Promise<MediaItem[]> | null = null;
 
   constructor(private readonly settingsService: SettingsService) {}
+
+  async onModuleInit() {
+    this.logger.log('Warming up library cache on startup...');
+    this.getLibrary(false).catch((err) =>
+      this.logger.error(`Library warm-up failed: ${err}`),
+    );
+  }
 
   async getLibrary(forceRescan = false): Promise<MediaItem[]> {
     const settings = await this.settingsService.getSettings();
     const ttlMs = settings.scanCacheTtlMinutes * 60_000;
     const now = Date.now();
 
-    this.logger.log(`getLibrary called. forceRescan=${forceRescan}, mediaDirs=${JSON.stringify(settings.mediaDirs)}`);
+    this.logger.log(
+      `getLibrary called. forceRescan=${forceRescan}, mediaDirs=${JSON.stringify(settings.mediaDirs)}`,
+    );
 
     if (!forceRescan && this.cache && this.cache.expiresAt > now) {
-      this.logger.log(`Returning cached library with ${this.cache.items.length} items`);
+      this.logger.log(
+        `Returning cached library with ${this.cache.items.length} items`,
+      );
       return this.cache.items;
     }
 
-    const items: MediaItem[] = [];
-    for (const mediaRoot of settings.mediaDirs) {
+    if (this.scanPromise) {
+      this.logger.log('Scan already in progress, waiting for it to finish...');
+      return this.scanPromise;
+    }
+
+    this.scanPromise = this.performScan(settings.mediaDirs, ttlMs).finally(
+      () => {
+        this.scanPromise = null;
+      },
+    );
+    return this.scanPromise;
+  }
+
+  private async performScan(
+    mediaDirs: string[],
+    ttlMs: number,
+  ): Promise<MediaItem[]> {
+    const startTime = Date.now();
+    const allFiles: string[] = [];
+
+    for (const mediaRoot of mediaDirs) {
       this.logger.log(`Scanning directory: ${mediaRoot}`);
       try {
         const files = await this.walkDirectory(mediaRoot);
         this.logger.log(`Found ${files.length} media files in ${mediaRoot}`);
-        for (const mediaFile of files) {
-          try {
-            items.push(await this.buildMediaItem(mediaFile));
-          } catch (err) {
-            this.logger.error(`Failed to build media item for ${mediaFile}: ${err}`);
-          }
-        }
+        allFiles.push(...files);
       } catch (err) {
         this.logger.error(`Failed to scan directory ${mediaRoot}: ${err}`);
       }
     }
 
-    this.logger.log(`Library scan complete. Total items: ${items.length}`);
+    const items = await this.buildAllMediaItems(allFiles);
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    this.logger.log(
+      `Library scan complete. ${items.length} items in ${elapsed}s`,
+    );
 
-    this.cache = {
-      items,
-      expiresAt: now + ttlMs,
-    };
-
+    this.cache = { items, expiresAt: Date.now() + ttlMs };
     return items;
+  }
+
+  private async buildAllMediaItems(files: string[]): Promise<MediaItem[]> {
+    const results: MediaItem[] = [];
+
+    for (let i = 0; i < files.length; i += PROBE_CONCURRENCY) {
+      const batch = files.slice(i, i + PROBE_CONCURRENCY);
+      const settled = await Promise.allSettled(
+        batch.map((file) => this.buildMediaItem(file)),
+      );
+      for (const result of settled) {
+        if (result.status === 'fulfilled') {
+          results.push(result.value);
+        } else {
+          this.logger.error(`Failed to build media item: ${result.reason}`);
+        }
+      }
+    }
+
+    return results;
   }
 
   async getById(id: string): Promise<MediaItem> {
@@ -178,6 +230,14 @@ export class LibraryService {
 
   private execFfprobe(filePath: string): Promise<string> {
     return new Promise((resolve, reject) => {
+      let settled = false;
+      const settle = (fn: () => void) => {
+        if (!settled) {
+          settled = true;
+          fn();
+        }
+      };
+
       const child = spawn('ffprobe', [
         '-v',
         'quiet',
@@ -186,6 +246,14 @@ export class LibraryService {
         '-show_streams',
         filePath,
       ]);
+
+      const timer = setTimeout(() => {
+        child.kill('SIGKILL');
+        settle(() =>
+          reject(new Error(`ffprobe timed out after ${FFPROBE_TIMEOUT_MS}ms for ${filePath}`)),
+        );
+      }, FFPROBE_TIMEOUT_MS);
+
       let stdout = '';
       let stderr = '';
 
@@ -197,17 +265,26 @@ export class LibraryService {
         stderr += chunk.toString('utf8');
       });
 
+      child.on('error', (err) => {
+        clearTimeout(timer);
+        settle(() =>
+          reject(new Error(`ffprobe spawn error for ${filePath}: ${err.message}`)),
+        );
+      });
+
       child.on('close', (code) => {
+        clearTimeout(timer);
         if (code !== 0) {
-          reject(
-            new Error(
-              `ffprobe failed for ${filePath}: ${stderr || `exit ${code}`}`,
+          settle(() =>
+            reject(
+              new Error(
+                `ffprobe failed for ${filePath}: ${stderr || `exit ${code}`}`,
+              ),
             ),
           );
           return;
         }
-
-        resolve(stdout);
+        settle(() => resolve(stdout));
       });
     });
   }

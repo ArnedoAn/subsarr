@@ -49,6 +49,7 @@ export class SettingsService {
       concurrency: settings.concurrency,
       pathContainsExclusions: settings.pathContainsExclusions,
       fileTooLargeBytes: settings.fileTooLargeBytes,
+      translationVerificationEnabled: settings.translationVerificationEnabled,
       rules: settings.rules,
     };
   }
@@ -73,6 +74,7 @@ export class SettingsService {
       pathContainsExclusions: input.pathContainsExclusions
         .map((entry) => entry.trim())
         .filter((entry) => entry.length > 0),
+      translationVerificationEnabled: input.translationVerificationEnabled,
       rules: input.rules,
     };
 
@@ -104,6 +106,7 @@ export class SettingsService {
       concurrency: config.concurrency,
       pathContainsExclusions: config.pathExclusions,
       fileTooLargeBytes: config.fileTooLargeBytes,
+      translationVerificationEnabled: false,
       rules: DEFAULT_RULES,
     };
   }
@@ -135,6 +138,9 @@ export class SettingsService {
         pathContainsExclusions: (
           parsed.pathContainsExclusions ?? defaults.pathContainsExclusions
         ).filter((entry) => entry.length > 0),
+        translationVerificationEnabled:
+          parsed.translationVerificationEnabled ??
+          defaults.translationVerificationEnabled,
         rules: parsed.rules ?? defaults.rules,
       };
     } catch (error) {

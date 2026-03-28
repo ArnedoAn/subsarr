@@ -106,12 +106,45 @@ export class TranslationJobProcessor {
         settings.deepSeekApiKey,
         {
           provider: job.data.provider,
+          sourceLanguage: job.data.sourceLanguage,
+          verificationEnabled: settings.translationVerificationEnabled,
           onProgress: (info) => {
             const overallProgress = 25 + Math.floor((info.progressPercent / 100) * 65);
             publish('translating', overallProgress, info.message, info.details);
           },
+          onLogFailedLine: (failed) => {
+            this.jobLogsService.append({
+              jobId,
+              level: 'warn',
+              phase: 'verification',
+              message: `Line ${failed.index + 1} failed: ${failed.reason}${failed.detectedLanguage ? ` (detected: ${failed.detectedLanguage})` : ''}`,
+              details: {
+                lineNumber: failed.index + 1,
+                source: failed.sourceText.substring(0, 150),
+                translated: failed.translatedText.substring(0, 150),
+                reason: failed.reason,
+                confidence: failed.confidence,
+              },
+            });
+          },
         }
       );
+
+      if (translated.verification) {
+        this.jobLogsService.append({
+          jobId,
+          level: translated.verification.failedCount > 0 ? 'warn' : 'info',
+          phase: 'verification',
+          message: `Translation verification: ${translated.verification.successRate}% success rate`,
+          details: {
+            totalLines: translated.verification.totalLines,
+            passedLines: translated.verification.passedLines,
+            failedCount: translated.verification.failedCount,
+            retriedLines: translated.verification.retriedLines,
+            fixedByRetry: translated.verification.fixedByRetry,
+          },
+        });
+      }
 
       for (const warning of translated.warnings) {
         this.jobLogsService.append({

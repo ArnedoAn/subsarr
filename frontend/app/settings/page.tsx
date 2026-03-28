@@ -55,6 +55,7 @@ export default function SettingsPage() {
       concurrency: settings.concurrency,
       pathContainsExclusions: settings.pathContainsExclusions,
       fileTooLargeBytes: settings.fileTooLargeBytes,
+      translationVerificationEnabled: settings.translationVerificationEnabled,
       rules: settings.rules,
     });
 
@@ -132,8 +133,8 @@ export default function SettingsPage() {
           </section>
 
           {/* Translation Defaults */}
-          <section className="bg-surface-container rounded-xl p-8">
-            <h2 className="section-label mb-6">Translation Defaults</h2>
+          <section className="bg-surface-container rounded-xl p-8 space-y-6">
+            <h2 className="section-label">Translation Defaults</h2>
             <div className="grid grid-cols-2 gap-6">
               <div className="space-y-2">
                 <label className="field-label">Source Language</label>
@@ -172,6 +173,32 @@ export default function SettingsPage() {
                     expand_more
                   </span>
                 </div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-4 pt-2 border-t border-cyan-400/10">
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={settings.translationVerificationEnabled}
+                  onChange={(event) =>
+                    setSettings({ ...settings, translationVerificationEnabled: event.target.checked })
+                  }
+                  className="sr-only peer"
+                />
+                <div className={`w-11 h-6 rounded-full transition-colors duration-200 ${
+                  settings.translationVerificationEnabled ? 'bg-primary' : 'bg-surface-container-highest'
+                }`}>
+                  <div className={`absolute top-0.5 w-5 h-5 bg-on-surface rounded-full transition-transform duration-200 ${
+                    settings.translationVerificationEnabled ? 'translate-x-6' : 'translate-x-0.5'
+                  }`} />
+                </div>
+              </label>
+              <div>
+                <p className="text-sm font-bold text-on-surface">Translation Verification</p>
+                <p className="text-xs text-on-surface-variant leading-relaxed">
+                  Verifies translated lines using language detection. Failed lines are automatically re-translated up to 2 times.
+                </p>
               </div>
             </div>
           </section>

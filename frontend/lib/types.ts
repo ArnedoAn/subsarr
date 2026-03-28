@@ -51,6 +51,7 @@ export interface SettingsPayload {
   concurrency: number;
   pathContainsExclusions: string[];
   fileTooLargeBytes?: number;
+  translationVerificationEnabled: boolean;
   rules: Array<{ id: string; enabled: boolean }>;
 }
 
