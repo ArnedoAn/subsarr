@@ -1,6 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
 import OpenAI from 'openai';
-import { OpenRouter } from '@openrouter/sdk';
 import type { ChatCompletion } from 'openai/resources';
 import {
   TranslationVerificationService,
@@ -40,6 +39,7 @@ interface BatchResult {
 const BATCH_SIZE = 60;
 const OVERLAP_SIZE = 2;
 const EXHAUSTION_FAILURE_LIMIT = 3;
+const OPENROUTER_CHAT_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
 @Injectable()
 export class TranslationService {
@@ -346,13 +346,16 @@ export class TranslationService {
     targetLanguage: string,
     apiKey: string,
   ): Promise<BatchResult> {
-    const client = new OpenRouter({ apiKey });
-
     try {
-      const response = await client.chat.send({
-        chatGenerationParams: {
+      const httpResponse = await fetch(OPENROUTER_CHAT_URL, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey.trim()}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
           model: 'openrouter/free',
-          responseFormat: { type: 'json_object' },
+          response_format: { type: 'json_object' },
           messages: [
             {
               role: 'system',
@@ -363,24 +366,57 @@ export class TranslationService {
               content: JSON.stringify(batch),
             },
           ],
-        },
+        }),
       });
 
-      this.consecutiveOpenRouterFailures = 0;
-      
-      const content =
-        response.choices?.[0]?.message?.content ?? '[]';
+      const rawText = await httpResponse.text();
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(rawText) as Record<string, unknown>;
+      } catch {
+        throw new Error(
+          `OpenRouter returned non-JSON (HTTP ${httpResponse.status}): ${rawText.slice(0, 300)}`,
+        );
+      }
 
-      return this.validateAndMapResponse(
-        batch,
-        content,
-        {
-          promptTokens: response.usage?.promptTokens ?? 0,
-          completionTokens: response.usage?.completionTokens ?? 0,
-          totalTokens: response.usage?.totalTokens ?? 0,
-        },
-        'free',
-      );
+      const body = parsed as Record<string, unknown>;
+
+      if (!httpResponse.ok) {
+        const errDetail =
+          typeof body.error === 'object' && body.error !== null
+            ? JSON.stringify(body.error)
+            : String(body.error ?? rawText.slice(0, 400));
+        throw new Error(`OpenRouter HTTP ${httpResponse.status}: ${errDetail}`);
+      }
+
+      const choices = body.choices as Array<Record<string, unknown>> | undefined;
+      const message = choices?.[0]?.message as Record<string, unknown> | undefined;
+      let content = '';
+      const rawContent = message?.content;
+      if (typeof rawContent === 'string') {
+        content = rawContent;
+      } else if (Array.isArray(rawContent)) {
+        content = rawContent
+          .map((part: unknown) => {
+            if (typeof part === 'string') return part;
+            if (part && typeof part === 'object' && 'text' in part) {
+              return String((part as { text?: string }).text ?? '');
+            }
+            return '';
+          })
+          .join('');
+      }
+
+      const usageRaw = body.usage as Record<string, unknown> | undefined;
+      const usage = {
+        promptTokens: Number(usageRaw?.prompt_tokens ?? 0),
+        completionTokens: Number(usageRaw?.completion_tokens ?? 0),
+        totalTokens: Number(usageRaw?.total_tokens ?? 0),
+      };
+
+      this.consecutiveOpenRouterFailures = 0;
+
+      return this.validateAndMapResponse(batch, content || '[]', usage, 'free');
     } catch (error) {
       this.consecutiveOpenRouterFailures += 1;
       throw error;
