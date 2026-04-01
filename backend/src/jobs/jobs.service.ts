@@ -12,6 +12,10 @@ import {
   type MediaItem,
   type SubtitleTrack,
 } from '../library/media-item.entity';
+import {
+  subtitleOutputExtensionFromCodec,
+  type SubtitleOutputExtension,
+} from '../translation/subtitle-format';
 
 @Injectable()
 export class JobsService {
@@ -28,6 +32,7 @@ export class JobsService {
     let item: MediaItem | null = null;
     let sourceLanguage = '';
     let targetLanguage = '';
+    let outputExtension: SubtitleOutputExtension = 'srt';
 
     try {
       targetLanguage = this.normalizeLanguage(dto.targetLanguage);
@@ -36,6 +41,7 @@ export class JobsService {
       item = await this.libraryService.getById(dto.mediaItemId);
       this.validateMediaPath(dto, item);
       const sourceTrack = this.validateSourceTrack(item, dto.sourceTrackIndex);
+      outputExtension = subtitleOutputExtensionFromCodec(sourceTrack.codec);
       if (sourceTrack.language !== sourceLanguage) {
         throw new Error(
           `Source language ${sourceLanguage} does not match selected track language ${sourceTrack.language}`,
@@ -85,6 +91,8 @@ export class JobsService {
     const outputPath = this.outputService.buildSubtitlePath(
       item.path,
       targetLanguage,
+      false,
+      outputExtension,
     );
     const waiting = await this.translationQueue.getWaiting();
     const active = await this.translationQueue.getActive();
@@ -95,10 +103,13 @@ export class JobsService {
         return false;
       }
 
+      const ext = payload.outputExtension ?? 'srt';
       return (
         this.outputService.buildSubtitlePath(
           payload.mediaItemPath,
           payload.targetLanguage,
+          false,
+          ext,
         ) === outputPath
       );
     });
@@ -124,6 +135,7 @@ export class JobsService {
         sourceLanguage,
         targetLanguage,
         sourceTrackIndex: dto.sourceTrackIndex,
+        outputExtension,
         triggeredBy: dto.triggeredBy,
         forceBypassRules: dto.forceBypassRules ?? false,
         provider: dto.provider,

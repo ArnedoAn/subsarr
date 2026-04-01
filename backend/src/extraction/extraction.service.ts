@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { type SubtitleOutputExtension } from '../translation/subtitle-format';
 
 export interface ExtractionResult {
   tempFilePath: string;
@@ -15,10 +16,12 @@ export class ExtractionService {
   async extractSubtitleTrack(
     mediaPath: string,
     streamIndex: number,
+    outputExtension: SubtitleOutputExtension = 'srt',
   ): Promise<ExtractionResult> {
     const tempDir = path.join(os.tmpdir(), 'subsync');
     await fs.mkdir(tempDir, { recursive: true });
-    const tempFilePath = path.join(tempDir, `${randomUUID()}.srt`);
+    const ext = outputExtension === 'ass' ? 'ass' : 'srt';
+    const tempFilePath = path.join(tempDir, `${randomUUID()}.${ext}`);
 
     await this.runFfmpeg(mediaPath, streamIndex, tempFilePath);
 

@@ -26,4 +26,30 @@ describe('OutputService', () => {
       '/media/The.Matrix.1999.es.forced.srt',
     );
   });
+
+  it('builds ASS path when extension is ass', () => {
+    const service = new OutputService();
+    const result = service.buildSubtitlePath(
+      '/media/Show.S01E01.mkv',
+      'spa',
+      false,
+      'ass',
+    );
+    expect(normalizeSeparators(result)).toBe(
+      '/media/Show.S01E01.spa.ass',
+    );
+  });
+
+  it('builds forced ASS path', () => {
+    const service = new OutputService();
+    const result = service.buildSubtitlePath(
+      '/media/Show.S01E01.mkv',
+      'spa',
+      true,
+      'ass',
+    );
+    expect(normalizeSeparators(result)).toBe(
+      '/media/Show.S01E01.spa.forced.ass',
+    );
+  });
 });

@@ -111,3 +111,4 @@ frontend/.next/
 frontend/out/
 data/
 nul
+.sisyphus/plans/translation-verification.md

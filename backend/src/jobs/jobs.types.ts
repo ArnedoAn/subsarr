@@ -1,3 +1,5 @@
+import type { SubtitleOutputExtension } from '../translation/subtitle-format';
+
 export type JobPhase =
   | 'waiting'
   | 'active'
@@ -13,6 +15,8 @@ export interface TranslationJobPayload {
   sourceLanguage: string;
   targetLanguage: string;
   sourceTrackIndex: number;
+  /** Matches embedded source track codec (srt for subrip etc., ass for ass/ssa). */
+  outputExtension?: SubtitleOutputExtension;
   triggeredBy: 'manual' | 'batch';
   forceBypassRules?: boolean;
   provider?: 'openrouter' | 'deepseek';
