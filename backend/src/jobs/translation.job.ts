@@ -44,6 +44,8 @@ export class TranslationJobProcessor {
         | 'active'
         | 'extracting'
         | 'translating'
+        | 'validating'
+        | 'correcting'
         | 'writing'
         | 'completed'
         | 'failed',
@@ -97,6 +99,8 @@ export class TranslationJobProcessor {
         : rawBuffer.toString('utf8');
 
       const settings = await this.settingsService.getSettings();
+      let loggedFailedLines = 0;
+      const MAX_FAILED_LINES_TO_LOG = 10;
 
       if (outputExtension === 'ass') {
         const assParser = new AssParser();
@@ -123,12 +127,28 @@ export class TranslationJobProcessor {
             provider: job.data.provider,
             sourceLanguage: job.data.sourceLanguage,
             verificationEnabled: settings.translationVerificationEnabled,
+            onVerificationPhase: (info) => {
+              const progressPercent = info.phase === 'validating' ? 91 : 93;
+              publish(info.phase, progressPercent, info.message, info.details);
+            },
+            onVerificationSummary: (info) => {
+              publish(
+                'validating',
+                92,
+                `Validation: ${info.successRate}% success rate (${info.failedCount}/${info.totalLines} failed)`,
+                { countsByReason: info.countsByReason },
+              );
+            },
             onProgress: (info) => {
               const overallProgress =
                 25 + Math.floor((info.progressPercent / 100) * 65);
               publish('translating', overallProgress, info.message, info.details);
             },
             onLogFailedLine: (failed) => {
+              if (loggedFailedLines >= MAX_FAILED_LINES_TO_LOG) {
+                return;
+              }
+              loggedFailedLines += 1;
               this.jobLogsService.append({
                 jobId,
                 level: 'warn',
@@ -239,12 +259,28 @@ export class TranslationJobProcessor {
           provider: job.data.provider,
           sourceLanguage: job.data.sourceLanguage,
           verificationEnabled: settings.translationVerificationEnabled,
+          onVerificationPhase: (info) => {
+            const progressPercent = info.phase === 'validating' ? 91 : 93;
+            publish(info.phase, progressPercent, info.message, info.details);
+          },
+          onVerificationSummary: (info) => {
+            publish(
+              'validating',
+              92,
+              `Validation: ${info.successRate}% success rate (${info.failedCount}/${info.totalLines} failed)`,
+              { countsByReason: info.countsByReason },
+            );
+          },
           onProgress: (info) => {
             const overallProgress =
               25 + Math.floor((info.progressPercent / 100) * 65);
             publish('translating', overallProgress, info.message, info.details);
           },
           onLogFailedLine: (failed) => {
+            if (loggedFailedLines >= MAX_FAILED_LINES_TO_LOG) {
+              return;
+            }
+            loggedFailedLines += 1;
             this.jobLogsService.append({
               jobId,
               level: 'warn',

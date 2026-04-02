@@ -77,6 +77,17 @@ export class TranslationService {
       provider?: 'openrouter' | 'deepseek';
       sourceLanguage?: string;
       verificationEnabled?: boolean;
+      onVerificationPhase?: (info: {
+        phase: 'validating' | 'correcting';
+        message: string;
+        details?: any;
+      }) => void;
+      onVerificationSummary?: (info: {
+        successRate: number;
+        failedCount: number;
+        totalLines: number;
+        countsByReason: Record<string, number>;
+      }) => void;
       onProgress?: (info: {
         batchIndex: number;
         totalBatches: number;
@@ -169,12 +180,32 @@ export class TranslationService {
     }
 
     const sourceLanguage = options.sourceLanguage ?? 'eng';
+    if (options.onVerificationPhase) {
+      options.onVerificationPhase({
+        phase: 'validating',
+        message: 'Validating translation',
+        details: { totalLines: lines.length },
+      });
+    }
     const verification = this.verificationService.verifyTranslation(
       lines,
       output,
       sourceLanguage,
       targetLanguage,
     );
+
+    if (options.onVerificationSummary) {
+      const countsByReason: Record<string, number> = {};
+      for (const failed of verification.failedLines) {
+        countsByReason[failed.reason] = (countsByReason[failed.reason] ?? 0) + 1;
+      }
+      options.onVerificationSummary({
+        successRate: verification.successRate,
+        failedCount: verification.failedLines.length,
+        totalLines: lines.length,
+        countsByReason,
+      });
+    }
 
     let retriedLines = 0;
     let fixedByRetry = 0;
@@ -183,9 +214,21 @@ export class TranslationService {
       this.logger.warn(
         `Translation verification: ${verification.successRate}% success rate, ${verification.failedLines.length} failed lines`,
       );
+      this.verificationService.logFailedLines(
+        verification.failedLines,
+        (message) => this.logger.warn(message),
+      );
 
       const MAX_RETRIES_PER_LINE = 2;
       retriedLines = verification.failedLines.length;
+
+      if (options.onVerificationPhase) {
+        options.onVerificationPhase({
+          phase: 'correcting',
+          message: `Correcting ${verification.failedLines.length} failed line(s)`,
+          details: { failedCount: verification.failedLines.length },
+        });
+      }
 
       for (const failed of verification.failedLines) {
         if (options.onLogFailedLine) {

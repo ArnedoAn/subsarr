@@ -6,294 +6,434 @@ import { useParams } from 'next/navigation';
 import { apiGet, apiPost } from '@/lib/api';
 import { type JobResult, type MediaItem, type RuleEvaluation } from '@/lib/types';
 import { COMMON_LANGUAGES } from '@/lib/languages';
+import { Badge } from '@/components/ui/badge';
+import { Breadcrumbs } from '@/components/ui/breadcrumbs';
+import { Button } from '@/components/ui/button';
+import { EmptyState } from '@/components/ui/empty-state';
+import { useToast } from '@/components/ui/toast';
 
-interface ItemDetail extends MediaItem {
-  rules: RuleEvaluation[];
+interface ItemDetail extends MediaItem { rules: RuleEvaluation[]; }
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
+}
+
+function formatRelative(dateStr: string): string {
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const h = Math.floor(diff / 3600000);
+  const d = Math.floor(h / 24);
+  if (d > 0) return `${d}d ago`;
+  if (h > 0) return `${h}h ago`;
+  return 'just now';
 }
 
 export default function LibraryItemPage() {
   const params = useParams<{ id: string }>();
-  const [item, setItem] = useState<ItemDetail | null>(null);
-  const [jobs, setJobs] = useState<JobResult[]>([]);
+  const { success: toastSuccess, error: toastError } = useToast();
+
+  const [item, setItem]         = useState<ItemDetail | null>(null);
+  const [jobs, setJobs]         = useState<JobResult[]>([]);
+  const [loading, setLoading]   = useState(true);
+  const [queuing, setQueuing]   = useState(false);
+
   const [sourceTrackIndex, setSourceTrackIndex] = useState<number | null>(null);
-  const [sourceLanguage, setSourceLanguage] = useState('eng');
-  const [targetLanguage, setTargetLanguage] = useState('spa');
-  const [forceBypass, setForceBypass] = useState(false);
-  const [provider, setProvider] = useState<'openrouter' | 'deepseek'>('openrouter');
-  const [error, setError] = useState<string | null>(null);
+  const [sourceLanguage, setSourceLanguage]     = useState('eng');
+  const [targetLanguage, setTargetLanguage]     = useState('spa');
+  const [forceBypass, setForceBypass]           = useState(false);
+  const [provider, setProvider]                 = useState<'openrouter' | 'deepseek'>('openrouter');
 
   const load = useCallback(async () => {
-    setError(null);
+    setLoading(true);
     try {
-      const [itemResponse, jobsResponse] = await Promise.all([
+      const [itemRes, jobsRes] = await Promise.all([
         apiGet<ItemDetail>(`/library/${params.id}`),
         apiGet<JobResult[]>('/jobs'),
       ]);
-      setItem(itemResponse);
-      const firstTrack = itemResponse.subtitleTracks[0];
+      setItem(itemRes);
+      const firstTrack = itemRes.subtitleTracks[0];
       setSourceTrackIndex(firstTrack?.index ?? null);
       setSourceLanguage(firstTrack?.language ?? 'eng');
-      setJobs(jobsResponse.filter((job) => job.data.mediaItemId === params.id));
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Failed to load media item');
+      setJobs(jobsRes.filter(j => j.data.mediaItemId === params.id));
+    } catch (err) {
+      toastError(err instanceof Error ? err.message : 'Failed to load media item');
+    } finally {
+      setLoading(false);
     }
-  }, [params.id]);
+  }, [params.id, toastError]);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  useEffect(() => { void load(); }, [load]);
 
-  const isBlocked = useMemo(() => item?.rules.some((rule) => rule.skip) ?? false, [item]);
+  const isBlocked = useMemo(() => item?.rules.some(r => r.skip) ?? false, [item]);
 
   const queue = async () => {
-    if (!item || sourceTrackIndex === null) {
-      return;
+    if (!item || sourceTrackIndex === null) return;
+    setQueuing(true);
+    try {
+      await apiPost('/jobs', {
+        mediaItemId: item.id,
+        mediaItemPath: item.path,
+        sourceLanguage,
+        targetLanguage,
+        sourceTrackIndex,
+        triggeredBy: 'manual',
+        forceBypassRules: forceBypass,
+        provider,
+      });
+      toastSuccess('Translation job queued');
+      await load();
+    } catch (err) {
+      toastError(err instanceof Error ? err.message : 'Failed to queue job');
+    } finally {
+      setQueuing(false);
     }
-
-    await apiPost('/jobs', {
-      mediaItemId: item.id,
-      mediaItemPath: item.path,
-      sourceLanguage,
-      targetLanguage,
-      sourceTrackIndex,
-      triggeredBy: 'manual',
-      forceBypassRules: forceBypass,
-      provider,
-    });
-
-    await load();
   };
 
-  if (!item) {
+  if (loading) {
     return (
-      <div className="flex items-center justify-center py-12">
-        <p className="text-sm text-on-surface-variant">Loading media detail...</p>
+      <div className="flex items-center justify-center py-20">
+        <div className="flex items-center gap-3 text-on-surface-variant">
+          <span className="material-symbols-outlined text-[20px] animate-spin">progress_activity</span>
+          <span className="text-sm">Loading…</span>
+        </div>
       </div>
     );
   }
 
-  return (
-    <section className="space-y-8">
-      {error ? (
-        <div className="rounded-lg bg-error-container px-4 py-3 text-sm text-on-error-container border-l-4 border-error">
-          {error}
-        </div>
-      ) : null}
+  if (!item) {
+    return (
+      <EmptyState
+        icon="error"
+        title="Media item not found"
+        description="This item may have been removed or the library rescanned."
+        action={<Link href="/" className="btn btn-secondary btn-sm">Back to Library</Link>}
+      />
+    );
+  }
 
-      {/* Media Info Header */}
-      <div className="bg-surface-container rounded-xl p-8">
-        <h2 className="text-2xl font-headline font-black uppercase tracking-[0.05em] text-on-surface">
-          {item.name}
-        </h2>
-        <p className="mt-2 text-sm font-mono text-on-surface-variant">{item.path}</p>
-        <p className="mt-2 text-xs text-on-surface-variant">
-          Size: {Math.round(item.size / 1024 / 1024)} MB · Modified: {new Date(item.lastModified).toLocaleString()}
-        </p>
+  return (
+    <section className="space-y-6">
+      {/* Breadcrumbs */}
+      <Breadcrumbs
+        items={[
+          { label: 'Library', href: '/' },
+          { label: item.name },
+        ]}
+      />
+
+      {/* File Info Header */}
+      <div className="bg-surface-container rounded-lg p-5">
+        <div className="flex items-start gap-3">
+          <span
+            className="material-symbols-outlined text-[28px] text-on-surface-variant mt-0.5 flex-shrink-0"
+            style={{ fontVariationSettings: 'FILL 0' }}
+          >
+            {item.type === 'movie' ? 'movie' : item.type === 'episode' ? 'tv_gen' : 'video_file'}
+          </span>
+          <div className="min-w-0 flex-1">
+            <h1 className="text-lg font-bold text-on-surface leading-tight break-words">{item.name}</h1>
+            <p className="mt-1 text-xs font-mono text-on-surface-variant break-all">{item.path}</p>
+            <div className="flex flex-wrap items-center gap-3 mt-2 text-xs text-on-surface-variant">
+              <span className="flex items-center gap-1">
+                <span className="material-symbols-outlined text-[14px]">storage</span>
+                {formatBytes(item.size)}
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="material-symbols-outlined text-[14px]">schedule</span>
+                {formatRelative(item.lastModified)}
+              </span>
+              <Badge variant="neutral">{item.type}</Badge>
+            </div>
+          </div>
+        </div>
       </div>
 
-      <div className="grid grid-cols-12 gap-8">
-        {/* LEFT: Subtitle Tracks */}
-        <div className="col-span-12 lg:col-span-5">
-          <div className="bg-surface-container rounded-xl p-8 space-y-6">
-            <h3 className="section-label">Embedded Subtitles</h3>
-            <div className="space-y-3">
-              {item.subtitleTracks.map((track) => (
-                <label
-                  key={track.index}
-                  className={`flex items-center justify-between p-4 rounded-lg cursor-pointer transition-colors ${
-                    sourceTrackIndex === track.index
-                      ? 'bg-primary/10 border border-primary/30'
-                      : 'bg-surface-container-high hover:bg-surface-bright'
-                  }`}
-                >
-                  <span className="text-sm font-mono text-on-surface">
-                    #{track.index} · {track.language} · {track.codec}
-                  </span>
-                  <input
-                    type="radio"
-                    checked={sourceTrackIndex === track.index}
-                    onChange={() => {
-                      setSourceTrackIndex(track.index);
-                      setSourceLanguage(track.language);
-                    }}
-                    className="h-4 w-4 accent-primary"
-                  />
-                </label>
-              ))}
-            </div>
+      {/* Main grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
 
-            <h4 className="section-label mt-6">External Subtitles</h4>
-            <ul className="space-y-2 text-xs font-mono text-on-surface-variant">
-              {item.externalSubtitles.map((subtitle) => (
-                <li key={subtitle.path} className="bg-surface-container-high p-3 rounded-lg">
-                  {subtitle.path}
-                </li>
-              ))}
-            </ul>
+        {/* LEFT: Tracks */}
+        <div className="lg:col-span-5 space-y-5">
+
+          {/* Embedded tracks */}
+          <div className="bg-surface-container rounded-lg p-5 space-y-3">
+            <h2 className="text-sm font-semibold text-on-surface flex items-center gap-2">
+              <span className="material-symbols-outlined text-[16px] text-on-surface-variant">subtitles</span>
+              Subtitle Tracks
+            </h2>
+            {item.subtitleTracks.length === 0 ? (
+              <p className="text-xs text-on-surface-variant">No embedded subtitle tracks found</p>
+            ) : (
+              <div className="space-y-2">
+                {item.subtitleTracks.map(track => {
+                  const active = sourceTrackIndex === track.index;
+                  return (
+                    <label
+                      key={track.index}
+                      className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-all ${
+                        active
+                          ? 'bg-primary/10 border border-primary/30 text-on-surface'
+                          : 'bg-surface-container-high border border-transparent hover:border-outline-variant/30 text-on-surface-variant'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        checked={active}
+                        onChange={() => {
+                          setSourceTrackIndex(track.index);
+                          setSourceLanguage(track.language);
+                        }}
+                        className="h-4 w-4 accent-primary"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-xs font-mono font-semibold">
+                            #{track.index} · {track.language.toUpperCase()}
+                          </span>
+                          <span className="text-[10px] text-on-surface-variant font-mono bg-surface-container px-1.5 py-0.5 rounded">
+                            {track.codec}
+                          </span>
+                        </div>
+                        {track.title && (
+                          <p className="text-xs text-on-surface-variant mt-0.5 truncate">{track.title}</p>
+                        )}
+                      </div>
+                      {active && (
+                        <span className="material-symbols-outlined text-[18px] text-primary flex-shrink-0" style={{ fontVariationSettings: 'FILL 1' }}>
+                          radio_button_checked
+                        </span>
+                      )}
+                    </label>
+                  );
+                })}
+              </div>
+            )}
           </div>
+
+          {/* External subtitles */}
+          {item.externalSubtitles.length > 0 && (
+            <div className="bg-surface-container rounded-lg p-5 space-y-3">
+              <h2 className="text-sm font-semibold text-on-surface flex items-center gap-2">
+                <span className="material-symbols-outlined text-[16px] text-on-surface-variant">file_present</span>
+                External Subtitles
+              </h2>
+              <ul className="space-y-1.5">
+                {item.externalSubtitles.map(sub => (
+                  <li
+                    key={sub.path}
+                    className="flex items-center gap-2 bg-surface-container-high rounded px-3 py-2"
+                  >
+                    <span className="text-[10px] font-mono font-semibold text-primary bg-primary/10 px-1.5 py-0.5 rounded flex-shrink-0">
+                      {sub.language.toUpperCase()}{sub.forced ? ' F' : ''}
+                    </span>
+                    <span className="text-xs font-mono text-on-surface-variant truncate" title={sub.path}>
+                      {sub.path.split(/[\\/]/).pop()}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
 
         {/* RIGHT: Translation Controls */}
-        <div className="col-span-12 lg:col-span-7">
-          <div className="bg-surface-container rounded-xl p-8 space-y-6">
-            <h3 className="section-label">Translation Pipeline</h3>
-            <div className="grid grid-cols-2 gap-6">
-              <div className="space-y-2">
+        <div className="lg:col-span-7 space-y-5">
+
+          {/* Translation Pipeline */}
+          <div className="bg-surface-container rounded-lg p-5 space-y-4">
+            <h2 className="text-sm font-semibold text-on-surface">Queue Translation</h2>
+
+            <div className="grid sm:grid-cols-2 gap-3">
+              <div className="space-y-1.5">
                 <label className="field-label">Source Language</label>
                 <div className="relative">
                   <select
                     value={sourceLanguage}
-                    onChange={(event) => {
-                      const language = event.target.value;
-                      setSourceLanguage(language);
-                      const track = item.subtitleTracks.find((candidate) => candidate.language === language);
-                      if (track) {
-                        setSourceTrackIndex(track.index);
-                      }
+                    onChange={e => {
+                      const lang = e.target.value;
+                      setSourceLanguage(lang);
+                      const track = item.subtitleTracks.find(t => t.language === lang);
+                      if (track) setSourceTrackIndex(track.index);
                     }}
-                    className="w-full engraved-input text-sm p-4 pr-10 rounded-lg text-on-surface appearance-none bg-surface-container-lowest cursor-pointer transition-all duration-200"
+                    className="w-full engraved-input text-sm px-3 py-2.5 pr-8 appearance-none cursor-pointer"
                   >
-                    {Array.from(new Set(item.subtitleTracks.map((track) => track.language))).map((language) => (
-                      <option key={language} value={language}>
-                        {language.toUpperCase()}
-                      </option>
+                    {Array.from(new Set(item.subtitleTracks.map(t => t.language))).map(lang => (
+                      <option key={lang} value={lang}>{lang.toUpperCase()}</option>
                     ))}
                   </select>
-                  <span className="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 text-on-surface-variant pointer-events-none">
-                    expand_more
-                  </span>
+                  <span className="material-symbols-outlined absolute right-2.5 top-1/2 -translate-y-1/2 text-[16px] text-on-surface-variant pointer-events-none">expand_more</span>
                 </div>
               </div>
-              <div className="space-y-2">
+              <div className="space-y-1.5">
                 <label className="field-label">Target Language</label>
                 <div className="relative">
                   <select
                     value={targetLanguage}
-                    onChange={(event) => setTargetLanguage(event.target.value)}
-                    className="w-full engraved-input text-sm p-4 pr-10 rounded-lg text-on-surface appearance-none bg-surface-container-lowest cursor-pointer transition-all duration-200"
+                    onChange={e => setTargetLanguage(e.target.value)}
+                    className="w-full engraved-input text-sm px-3 py-2.5 pr-8 appearance-none cursor-pointer"
                   >
-                    {COMMON_LANGUAGES.map((lang) => (
-                      <option key={`tgt-${lang.code}`} value={lang.code}>
-                        {lang.name} ({lang.code})
-                      </option>
+                    {COMMON_LANGUAGES.map(l => (
+                      <option key={l.code} value={l.code}>{l.name} ({l.code})</option>
                     ))}
                   </select>
-                  <span className="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 text-on-surface-variant pointer-events-none">
-                    expand_more
-                  </span>
+                  <span className="material-symbols-outlined absolute right-2.5 top-1/2 -translate-y-1/2 text-[16px] text-on-surface-variant pointer-events-none">expand_more</span>
                 </div>
               </div>
             </div>
 
-            {/* Rules Check */}
-            <div className="bg-surface-container-high p-6 rounded-xl">
-              <div className="flex items-center justify-between mb-4">
-                <p className="text-sm font-bold text-on-surface">Rules Check</p>
-                {isBlocked && (
-                  <span className="badge badge-secondary">BLOCKED</span>
-                )}
+            {/* Provider */}
+            <div className="flex items-center gap-3">
+              <label className="field-label flex-shrink-0">Provider</label>
+              <div className="flex gap-2">
+                {(['openrouter', 'deepseek'] as const).map(p => (
+                  <button
+                    key={p}
+                    onClick={() => setProvider(p)}
+                    className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                      provider === p
+                        ? 'bg-primary/10 text-primary border border-primary/30'
+                        : 'bg-surface-container-high text-on-surface-variant border border-outline-variant/30 hover:text-on-surface'
+                    }`}
+                  >
+                    {p === 'openrouter' ? 'OpenRouter (Free)' : 'DeepSeek (Paid)'}
+                  </button>
+                ))}
               </div>
-              <div className="space-y-3">
-                {item.rules.map((rule) => (
+            </div>
+
+            {/* Rules Check */}
+            <div className="bg-surface-container-high rounded-lg p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-semibold text-on-surface">Rules Check</h3>
+                {isBlocked && <Badge variant="warning" icon="warning">Blocked</Badge>}
+                {!isBlocked && <Badge variant="success" icon="check">All pass</Badge>}
+              </div>
+              <div className="space-y-1.5">
+                {item.rules.map(rule => (
                   <div
                     key={rule.id}
-                    className="flex items-center justify-between p-3 rounded-lg bg-surface-container"
+                    className="flex items-start gap-2.5 py-1.5"
                   >
-                    <span className="text-sm text-on-surface">{rule.label}</span>
                     <span
-                      className={`text-xs font-bold uppercase tracking-widest ${
-                        rule.skip ? 'text-error' : 'text-primary'
-                      }`}
+                      className={`material-symbols-outlined text-[16px] flex-shrink-0 mt-0.5 ${rule.skip ? 'text-error' : 'text-success'}`}
+                      style={{ fontVariationSettings: 'FILL 1' }}
                     >
-                      {rule.skip ? `X ${rule.reason ?? ''}` : 'PASS'}
+                      {rule.skip ? 'cancel' : 'check_circle'}
                     </span>
+                    <div className="min-w-0">
+                      <p className="text-xs font-medium text-on-surface">{rule.label}</p>
+                      {rule.skip && rule.reason && (
+                        <p className="text-xs text-error mt-0.5">{rule.reason}</p>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
             </div>
 
-            {isBlocked ? (
-              <label className="flex items-center gap-3 p-4 rounded-lg bg-secondary/10 border border-secondary/30 cursor-pointer">
+            {/* Force bypass */}
+            {isBlocked && (
+              <label className="flex items-center gap-3 p-3 rounded-lg bg-warning/8 border border-warning/20 cursor-pointer">
                 <input
                   type="checkbox"
                   checked={forceBypass}
-                  onChange={(event) => setForceBypass(event.target.checked)}
-                  className="h-5 w-5 accent-secondary"
+                  onChange={e => setForceBypass(e.target.checked)}
+                  className="h-4 w-4 accent-primary rounded"
                 />
-                <span className="text-sm font-bold text-secondary">FORCE BYPASS RULES</span>
+                <div>
+                  <p className="text-sm font-medium text-warning">Force bypass rules</p>
+                  <p className="text-xs text-on-surface-variant">Override all rule checks and queue anyway</p>
+                </div>
               </label>
-            ) : null}
+            )}
 
-            <button
+            {/* Queue button */}
+            <Button
+              variant="primary"
+              loading={queuing}
+              disabled={item.subtitleTracks.length === 0 && !forceBypass}
+              iconLeft={queuing ? undefined : 'send'}
               onClick={() => void queue()}
-              className="w-full bg-gradient-to-br from-primary to-primary-container px-6 py-3 rounded text-xs font-black tracking-widest text-on-primary-container shadow-[0_0_15px_rgba(47,217,244,0.3)] hover:brightness-110 transition-all"
+              className="w-full justify-center"
             >
-              QUEUE TRANSLATION
-            </button>
-            <div className="flex justify-center mt-2">
-              <label className="text-xs text-on-surface-variant flex items-center gap-2">
-                Provider:
-                <select
-                  value={provider}
-                  onChange={(e) => setProvider(e.target.value as 'openrouter' | 'deepseek')}
-                  className="bg-transparent border-none text-on-surface cursor-pointer outline-none font-bold"
-                >
-                  <option value="openrouter">OpenRouter (Free)</option>
-                  <option value="deepseek">DeepSeek (Paid)</option>
-                </select>
-              </label>
-            </div>
+              {queuing ? 'Queuing…' : 'Queue Translation'}
+            </Button>
+
+            {item.subtitleTracks.length === 0 && (
+              <p className="text-xs text-on-surface-variant text-center">
+                No subtitle tracks available — cannot queue translation
+              </p>
+            )}
           </div>
         </div>
       </div>
 
       {/* Job History */}
-      <div className="bg-surface-container rounded-xl p-8">
-        <div className="flex items-center justify-between mb-6">
-          <h3 className="section-label">Job History</h3>
-          <Link href="/jobs" className="text-xs font-bold uppercase tracking-widest text-primary hover:text-primary/70">
-            OPEN ALL JOBS
+      <div className="bg-surface-container rounded-lg p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-on-surface">Job History</h2>
+          <Link href="/jobs" className="text-xs text-primary hover:text-primary/70 transition-colors flex items-center gap-1">
+            View all jobs
+            <span className="material-symbols-outlined text-[14px]">open_in_new</span>
           </Link>
         </div>
-        <div className="space-y-3">
-          {jobs.length === 0 ? (
-            <p className="text-sm text-on-surface-variant">No jobs found for this item.</p>
-          ) : (
-            jobs.map((job) => (
+
+        {jobs.length === 0 ? (
+          <p className="text-sm text-on-surface-variant py-4 text-center">No jobs found for this item.</p>
+        ) : (
+          <div className="space-y-2">
+            {jobs.map(job => (
               <div
                 key={String(job.id)}
-                className="flex items-center justify-between p-4 rounded-lg bg-surface-container-high"
+                className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 p-3 rounded-lg bg-surface-container-high"
               >
-                <div>
-                  <p className="text-sm font-bold text-on-surface">
-                    #{job.id} · <span className="font-mono uppercase">{job.state}</span>
-                  </p>
-                  <p className="text-xs font-mono text-on-surface-variant mt-1">
-                    {job.data.sourceLanguage.toUpperCase()} → {job.data.targetLanguage.toUpperCase()}
-                  </p>
-                  {job.returnValue ? (
-                    <p className="text-xs font-mono text-on-surface-variant">
-                      {job.returnValue.usage.totalTokens} tokens · {job.returnValue.tierUsed}
-                    </p>
-                  ) : null}
+                {/* Timeline dot */}
+                <div className="hidden sm:flex flex-col items-center gap-1 flex-shrink-0">
+                  <span
+                    className={`h-2.5 w-2.5 rounded-full ${
+                      job.state === 'completed' ? 'bg-success' :
+                      job.state === 'failed'    ? 'bg-error'   :
+                      job.state === 'active'    ? 'bg-primary animate-pulse' :
+                      'bg-warning'
+                    }`}
+                  />
                 </div>
-                <span
-                  className={`badge ${
-                    job.state === 'completed'
-                      ? 'badge-success'
-                      : job.state === 'failed'
-                        ? 'badge-error'
-                        : job.state === 'active'
-                          ? 'badge-primary'
-                          : 'badge-secondary'
-                  }`}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs font-mono text-on-surface-variant">#{job.id}</span>
+                    <span className="text-xs text-on-surface font-medium">
+                      {job.data.sourceLanguage.toUpperCase()} → {job.data.targetLanguage.toUpperCase()}
+                    </span>
+                    {job.returnValue && (
+                      <span className="text-xs text-on-surface-variant font-mono">
+                        {(job.returnValue.usage.totalTokens / 1000).toFixed(1)}k tokens · {job.returnValue.tierUsed}
+                      </span>
+                    )}
+                    {job.createdAt && (
+                      <span className="text-xs text-on-surface-variant">
+                        {formatRelative(new Date(job.createdAt).toISOString())}
+                      </span>
+                    )}
+                  </div>
+                  {job.state === 'failed' && job.failedReason && (
+                    <p className="text-xs text-error mt-1 truncate">{job.failedReason}</p>
+                  )}
+                </div>
+                <Badge
+                  variant={
+                    job.state === 'completed' ? 'success' :
+                    job.state === 'failed'    ? 'error'   :
+                    job.state === 'active'    ? 'primary' : 'warning'
+                  }
                 >
                   {job.state}
-                </span>
+                </Badge>
               </div>
-            ))
-          )}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
     </section>
   );

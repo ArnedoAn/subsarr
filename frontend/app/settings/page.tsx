@@ -5,6 +5,9 @@ import { apiGet, apiPost, apiPut } from '@/lib/api';
 import { type RuleDefinition, type SettingsPayload } from '@/lib/types';
 import { PathBrowser } from '@/components/path-browser';
 import { COMMON_LANGUAGES } from '@/lib/languages';
+import { Button } from '@/components/ui/button';
+import { Toggle } from '@/components/ui/toggle';
+import { useToast } from '@/components/ui/toast';
 
 interface TokenUsageSummary {
   free: { promptTokens: number; completionTokens: number; totalTokens: number };
@@ -12,353 +15,468 @@ interface TokenUsageSummary {
   deepSeekEstimatedCostUsd: number;
 }
 
+type TabId = 'general' | 'apikeys' | 'rules' | 'advanced';
+
+const TABS: { id: TabId; label: string; icon: string }[] = [
+  { id: 'general',  label: 'General',  icon: 'tune'         },
+  { id: 'apikeys',  label: 'API Keys', icon: 'key'          },
+  { id: 'rules',    label: 'Rules',    icon: 'rule'         },
+  { id: 'advanced', label: 'Advanced', icon: 'settings'     },
+];
+
 export default function SettingsPage() {
-  const [settings, setSettings] = useState<SettingsPayload | null>(null);
+  const { success, error: toastError } = useToast();
+  const [settings, setSettings]           = useState<SettingsPayload | null>(null);
   const [openRouterKey, setOpenRouterKey] = useState('');
-  const [deepSeekKey, setDeepSeekKey] = useState('');
-  const [tokenSummary, setTokenSummary] = useState<TokenUsageSummary | null>(null);
+  const [deepSeekKey, setDeepSeekKey]     = useState('');
+  const [tokenSummary, setTokenSummary]   = useState<TokenUsageSummary | null>(null);
   const [ruleDefinitions, setRuleDefinitions] = useState<RuleDefinition[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [activeTab, setActiveTab]         = useState<TabId>('general');
+  const [saving, setSaving]               = useState(false);
+  const [newExclusion, setNewExclusion]   = useState('');
 
   const load = useCallback(async () => {
-    setError(null);
     try {
-      const [settingsResponse, tokenUsageResponse, rulesResponse] = await Promise.all([
+      const [settingsRes, tokenRes, rulesRes] = await Promise.all([
         apiGet<SettingsPayload>('/settings'),
         apiGet<TokenUsageSummary>('/settings/token-usage'),
         apiGet<RuleDefinition[]>('/rules'),
       ]);
-      setSettings(settingsResponse);
-      setTokenSummary(tokenUsageResponse);
-      setRuleDefinitions(rulesResponse);
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Failed to load settings');
+      setSettings(settingsRes);
+      setTokenSummary(tokenRes);
+      setRuleDefinitions(rulesRes);
+    } catch (err) {
+      toastError(err instanceof Error ? err.message : 'Failed to load settings');
     }
-  }, []);
+  }, [toastError]);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  useEffect(() => { void load(); }, [load]);
 
   const save = async () => {
-    if (!settings) {
-      return;
+    if (!settings) return;
+    setSaving(true);
+    try {
+      await apiPut('/settings', {
+        mediaDirs: settings.mediaDirs,
+        sourceLanguage: settings.sourceLanguage,
+        targetLanguage: settings.targetLanguage,
+        openRouterApiKey: openRouterKey || undefined,
+        deepSeekApiKey: deepSeekKey || undefined,
+        scanCacheTtlMinutes: settings.scanCacheTtlMinutes,
+        concurrency: settings.concurrency,
+        pathContainsExclusions: settings.pathContainsExclusions,
+        fileTooLargeBytes: settings.fileTooLargeBytes,
+        translationVerificationEnabled: settings.translationVerificationEnabled,
+        rules: settings.rules,
+      });
+      setOpenRouterKey('');
+      setDeepSeekKey('');
+      success('Settings saved successfully');
+      await load();
+    } catch (err) {
+      toastError(err instanceof Error ? err.message : 'Failed to save settings');
+    } finally {
+      setSaving(false);
     }
-
-    await apiPut('/settings', {
-      mediaDirs: settings.mediaDirs,
-      sourceLanguage: settings.sourceLanguage,
-      targetLanguage: settings.targetLanguage,
-      openRouterApiKey: openRouterKey,
-      deepSeekApiKey: deepSeekKey,
-      scanCacheTtlMinutes: settings.scanCacheTtlMinutes,
-      concurrency: settings.concurrency,
-      pathContainsExclusions: settings.pathContainsExclusions,
-      fileTooLargeBytes: settings.fileTooLargeBytes,
-      translationVerificationEnabled: settings.translationVerificationEnabled,
-      rules: settings.rules,
-    });
-
-    setOpenRouterKey('');
-    setDeepSeekKey('');
-    await load();
   };
 
   const reset = async () => {
-    await apiPost('/settings/reset');
-    await load();
+    try {
+      await apiPost('/settings/reset');
+      success('Settings reset to defaults');
+      await load();
+    } catch (err) {
+      toastError(err instanceof Error ? err.message : 'Reset failed');
+    }
   };
 
   if (!settings) {
     return (
-      <div className="flex items-center justify-center py-12">
-        <p className="text-sm text-on-surface-variant">Loading settings...</p>
+      <div className="flex items-center justify-center py-20">
+        <div className="flex items-center gap-3 text-on-surface-variant">
+          <span className="material-symbols-outlined text-[20px] animate-spin">progress_activity</span>
+          <span className="text-sm">Loading settings…</span>
+        </div>
       </div>
     );
   }
 
   return (
-    <section className="space-y-8">
-      {error ? (
-        <div className="rounded-lg bg-error-container px-4 py-3 text-sm text-on-error-container border-l-4 border-error">
-          {error}
+    <section className="space-y-6">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-on-surface tracking-tight">Settings</h1>
+          <p className="text-sm text-on-surface-variant mt-0.5">Configure your translation preferences</p>
         </div>
-      ) : null}
+      </div>
 
-      {/* Asymmetric Grid: Left = 7 cols, Right = 5 cols */}
-      <div className="grid grid-cols-12 gap-8">
-        {/* LEFT COLUMN: Media & Languages */}
-        <div className="col-span-12 lg:col-span-7 space-y-8">
-          {/* Media Folders */}
-          <section className="bg-surface-container rounded-xl p-8 space-y-6">
-            <div className="flex justify-between items-center">
-              <h2 className="section-label">Media Directories</h2>
-              <button
-                onClick={() => setSettings({ ...settings, mediaDirs: [...settings.mediaDirs, ''] })}
-                className="text-secondary border border-secondary/30 px-3 py-1 rounded text-[10px] font-bold tracking-widest hover:bg-secondary/10 transition-colors"
+      {/* Tabs + Content */}
+      <div className="flex flex-col lg:flex-row gap-6">
+        {/* Tab navigation */}
+        <nav className="flex lg:flex-col gap-1 lg:w-44 flex-shrink-0">
+          {TABS.map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition-all text-left
+                ${activeTab === tab.id
+                  ? 'bg-primary/10 text-primary'
+                  : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high'
+                }`}
+            >
+              <span
+                className="material-symbols-outlined text-[18px] flex-shrink-0"
+                style={{ fontVariationSettings: activeTab === tab.id ? 'FILL 1' : 'FILL 0' }}
               >
-                ADD FOLDER
-              </button>
-            </div>
-            <div className="space-y-3">
-              {settings.mediaDirs.map((entry, index) => (
-                <div
-                  key={`dir-${index}`}
-                  className="flex items-center gap-3 w-full group"
-                >
-                  <div className="flex-1">
-                    <PathBrowser
-                      value={entry}
-                      onChange={(newPath) => {
-                        const updated = [...settings.mediaDirs];
-                        updated[index] = newPath;
-                        setSettings({ ...settings, mediaDirs: updated });
-                      }}
-                      placeholder="Select media directory..."
-                    />
+                {tab.icon}
+              </span>
+              {tab.label}
+            </button>
+          ))}
+        </nav>
+
+        {/* Tab content */}
+        <div className="flex-1 min-w-0 space-y-6">
+
+          {/* GENERAL TAB */}
+          {activeTab === 'general' && (
+            <>
+              {/* Media Directories */}
+              <div className="bg-surface-container rounded-lg p-6 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="text-sm font-semibold text-on-surface">Media Directories</h2>
+                    <p className="text-xs text-on-surface-variant mt-0.5">Folders to scan for media files</p>
                   </div>
-                  <button
-                    onClick={() => {
-                      const updated = settings.mediaDirs.filter((_, itemIndex) => itemIndex !== index);
-                      setSettings({ ...settings, mediaDirs: updated });
-                    }}
-                    className="material-symbols-outlined text-on-surface-variant hover:text-error transition-colors p-2 rounded-lg bg-surface-container-highest opacity-0 group-hover:opacity-100"
-                    title="Remove directory"
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    iconLeft="add"
+                    onClick={() => setSettings({ ...settings, mediaDirs: [...settings.mediaDirs, ''] })}
                   >
-                    close
-                  </button>
+                    Add
+                  </Button>
                 </div>
-              ))}
-            </div>
-          </section>
-
-          {/* Translation Defaults */}
-          <section className="bg-surface-container rounded-xl p-8 space-y-6">
-            <h2 className="section-label">Translation Defaults</h2>
-            <div className="grid grid-cols-2 gap-6">
-              <div className="space-y-2">
-                <label className="field-label">Source Language</label>
-                <div className="relative">
-                  <select
-                    value={settings.sourceLanguage}
-                    onChange={(event) => setSettings({ ...settings, sourceLanguage: event.target.value })}
-                    className="w-full engraved-input text-sm p-4 pr-10 rounded-lg text-on-surface appearance-none bg-surface-container-lowest cursor-pointer transition-all duration-200"
-                  >
-                    {COMMON_LANGUAGES.map((lang) => (
-                      <option key={`src-${lang.code}`} value={lang.code}>
-                        {lang.name} ({lang.code})
-                      </option>
-                    ))}
-                  </select>
-                  <span className="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 text-on-surface-variant pointer-events-none">
-                    expand_more
-                  </span>
-                </div>
-              </div>
-              <div className="space-y-2">
-                <label className="field-label">Target Language</label>
-                <div className="relative">
-                  <select
-                    value={settings.targetLanguage}
-                    onChange={(event) => setSettings({ ...settings, targetLanguage: event.target.value })}
-                    className="w-full engraved-input text-sm p-4 pr-10 rounded-lg text-on-surface appearance-none bg-surface-container-lowest cursor-pointer transition-all duration-200"
-                  >
-                    {COMMON_LANGUAGES.map((lang) => (
-                      <option key={`tgt-${lang.code}`} value={lang.code}>
-                        {lang.name} ({lang.code})
-                      </option>
-                    ))}
-                  </select>
-                  <span className="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 text-on-surface-variant pointer-events-none">
-                    expand_more
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-4 pt-2 border-t border-cyan-400/10">
-              <label className="relative inline-flex items-center cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={settings.translationVerificationEnabled}
-                  onChange={(event) =>
-                    setSettings({ ...settings, translationVerificationEnabled: event.target.checked })
-                  }
-                  className="sr-only peer"
-                />
-                <div className={`w-11 h-6 rounded-full transition-colors duration-200 ${
-                  settings.translationVerificationEnabled ? 'bg-primary' : 'bg-surface-container-highest'
-                }`}>
-                  <div className={`absolute top-0.5 w-5 h-5 bg-on-surface rounded-full transition-transform duration-200 ${
-                    settings.translationVerificationEnabled ? 'translate-x-6' : 'translate-x-0.5'
-                  }`} />
-                </div>
-              </label>
-              <div>
-                <p className="text-sm font-bold text-on-surface">Translation Verification</p>
-                <p className="text-xs text-on-surface-variant leading-relaxed">
-                  Verifies translated lines using language detection. Failed lines are automatically re-translated up to 2 times.
-                </p>
-              </div>
-            </div>
-          </section>
-
-          {/* Token Usage */}
-          <section className="grid grid-cols-2 gap-6">
-            <div className="bg-surface-container-high p-6 rounded-xl relative overflow-hidden group">
-              <div className="absolute inset-0 bg-primary/5 opacity-0 group-hover:opacity-100 transition-opacity" />
-              <p className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">FREE TIER</p>
-              <h3 className="text-3xl font-black text-primary mt-2">{tokenSummary?.free.totalTokens ?? 0}</h3>
-              <p className="text-[10px] font-mono mt-1 opacity-60">TOKENS USED</p>
-            </div>
-            <div className="bg-surface-container-high p-6 rounded-xl border-l-4 border-secondary/40">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">DEEPSEEK PAID</p>
-              <h3 className="text-3xl font-black text-secondary mt-2">{tokenSummary?.paid.totalTokens ?? 0}</h3>
-              <div className="flex justify-between items-center mt-1">
-                <p className="text-[10px] font-mono opacity-60">CURRENT SESSION</p>
-                <span className="text-xs font-bold text-secondary">${tokenSummary?.deepSeekEstimatedCostUsd ?? 0} USD</span>
-              </div>
-            </div>
-          </section>
-        </div>
-
-        {/* RIGHT COLUMN: API Keys, Rules, Paths */}
-        <div className="col-span-12 lg:col-span-5 space-y-8">
-          {/* API Keys */}
-          <section className="bg-surface-container rounded-xl p-8 space-y-6">
-            <h2 className="section-label">Neural Endpoints</h2>
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <div className="flex justify-between">
-                  <label className="field-label">OpenRouter API Key</label>
-                  <span className="text-[9px] bg-primary/10 text-primary px-2 py-0.5 rounded uppercase font-black">
-                    {settings.openRouterApiKeyMasked || 'UNSET'}
-                  </span>
-                </div>
-                <input
-                  type="password"
-                  value={openRouterKey}
-                  onChange={(event) => setOpenRouterKey(event.target.value)}
-                  placeholder="sk-or-v1-xxxxxxxxxxxxxxxxxxxx"
-                  className="w-full engraved-input text-xs p-4 rounded-lg text-on-surface"
-                />
-              </div>
-              <div className="space-y-2">
-                <div className="flex justify-between items-center">
-                  <label className="field-label">DeepSeek API Key</label>
-                  <span className="text-[9px] border border-secondary/40 text-secondary px-2 py-0.5 rounded uppercase font-black">
-                    PAID FALLBACK
-                  </span>
-                </div>
-                <input
-                  type="password"
-                  value={deepSeekKey}
-                  onChange={(event) => setDeepSeekKey(event.target.value)}
-                  placeholder="sk-ds-xxxxxxxxxxxxxxxxxxxx"
-                  className="w-full engraved-input text-xs p-4 rounded-lg text-on-surface"
-                />
-              </div>
-            </div>
-          </section>
-
-          {/* Rules Engine */}
-          <section className="bg-surface-container rounded-xl p-8 space-y-6">
-            <h2 className="section-label">Skip Rules Engine</h2>
-            <div className="space-y-6">
-              {ruleDefinitions.map((ruleDefinition) => {
-                const index = settings.rules.findIndex((rule) => rule.id === ruleDefinition.id);
-                const enabled = index >= 0 ? settings.rules[index].enabled : ruleDefinition.enabled;
-
-                return (
-                  <div key={ruleDefinition.id} className="flex gap-4">
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={enabled}
-                        onChange={(event) => {
-                          const updated = [...settings.rules];
-                          if (index >= 0) {
-                            updated[index] = { ...updated[index], enabled: event.target.checked };
-                          } else {
-                            updated.push({ id: ruleDefinition.id, enabled: event.target.checked });
-                          }
-                          setSettings({ ...settings, rules: updated });
-                        }}
-                        className="sr-only peer"
-                      />
-                      <div className={`w-11 h-6 rounded-full transition-colors duration-200 ${
-                        enabled ? 'bg-primary' : 'bg-surface-container-highest'
-                      }`}>
-                        <div className={`absolute top-0.5 w-5 h-5 bg-on-surface rounded-full transition-transform duration-200 ${
-                          enabled ? 'translate-x-6' : 'translate-x-0.5'
-                        }`} />
+                <div className="space-y-2">
+                  {settings.mediaDirs.map((dir, idx) => (
+                    <div key={idx} className="flex items-center gap-2 group">
+                      <div className="flex-1">
+                        <PathBrowser
+                          value={dir}
+                          onChange={newPath => {
+                            const updated = [...settings.mediaDirs];
+                            updated[idx] = newPath;
+                            setSettings({ ...settings, mediaDirs: updated });
+                          }}
+                          placeholder="Select or type a directory path…"
+                        />
                       </div>
-                    </label>
-                    <div>
-                      <p className="text-sm font-bold text-on-surface">{ruleDefinition.label}</p>
-                      <p className="text-xs text-on-surface-variant leading-relaxed">{ruleDefinition.description}</p>
+                      <button
+                        onClick={() => {
+                          const updated = settings.mediaDirs.filter((_, i) => i !== idx);
+                          setSettings({ ...settings, mediaDirs: updated });
+                        }}
+                        className="btn btn-ghost btn-icon btn-sm text-on-surface-variant hover:text-error opacity-0 group-hover:opacity-100 transition-all"
+                        title="Remove"
+                      >
+                        <span className="material-symbols-outlined text-[18px]">delete</span>
+                      </button>
+                    </div>
+                  ))}
+                  {settings.mediaDirs.length === 0 && (
+                    <p className="text-sm text-on-surface-variant text-center py-4">
+                      No directories configured. Add one to get started.
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* Translation Defaults */}
+              <div className="bg-surface-container rounded-lg p-6 space-y-4">
+                <div>
+                  <h2 className="text-sm font-semibold text-on-surface">Translation Defaults</h2>
+                  <p className="text-xs text-on-surface-variant mt-0.5">Default language pair for new translation jobs</p>
+                </div>
+                <div className="grid sm:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="field-label">Source Language</label>
+                    <div className="relative">
+                      <select
+                        value={settings.sourceLanguage}
+                        onChange={e => setSettings({ ...settings, sourceLanguage: e.target.value })}
+                        className="w-full engraved-input text-sm px-3 py-2.5 pr-8 appearance-none cursor-pointer"
+                      >
+                        {COMMON_LANGUAGES.map(l => (
+                          <option key={l.code} value={l.code}>{l.name} ({l.code})</option>
+                        ))}
+                      </select>
+                      <span className="material-symbols-outlined absolute right-2.5 top-1/2 -translate-y-1/2 text-[16px] text-on-surface-variant pointer-events-none">expand_more</span>
                     </div>
                   </div>
-                );
-              })}
-            </div>
-          </section>
+                  <div className="space-y-1.5">
+                    <label className="field-label">Target Language</label>
+                    <div className="relative">
+                      <select
+                        value={settings.targetLanguage}
+                        onChange={e => setSettings({ ...settings, targetLanguage: e.target.value })}
+                        className="w-full engraved-input text-sm px-3 py-2.5 pr-8 appearance-none cursor-pointer"
+                      >
+                        {COMMON_LANGUAGES.map(l => (
+                          <option key={l.code} value={l.code}>{l.name} ({l.code})</option>
+                        ))}
+                      </select>
+                      <span className="material-symbols-outlined absolute right-2.5 top-1/2 -translate-y-1/2 text-[16px] text-on-surface-variant pointer-events-none">expand_more</span>
+                    </div>
+                  </div>
+                </div>
 
-          {/* Path Exclusions */}
-          <section className="bg-surface-container rounded-xl p-8 space-y-6">
-            <h2 className="section-label">Global Exclusions</h2>
-            <div className="flex flex-wrap gap-2">
-              {settings.pathContainsExclusions.map((entry, index) => (
-                <span
-                  key={`${entry}-${index}`}
-                  className="bg-surface-container-high px-3 py-1.5 rounded-md text-[10px] font-mono text-on-surface-variant flex items-center gap-2"
-                >
-                  {entry}
-                </span>
-              ))}
+                <div className="pt-2 border-t border-outline-variant/15">
+                  <Toggle
+                    checked={settings.translationVerificationEnabled}
+                    onChange={v => setSettings({ ...settings, translationVerificationEnabled: v })}
+                    label="Translation Verification"
+                    description="Verifies translated lines using language detection. Failed lines are re-translated up to 2 times."
+                  />
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* API KEYS TAB */}
+          {activeTab === 'apikeys' && (
+            <>
+              <div className="bg-surface-container rounded-lg p-6 space-y-5">
+                <div>
+                  <h2 className="text-sm font-semibold text-on-surface">API Keys</h2>
+                  <p className="text-xs text-on-surface-variant mt-0.5">Configure your translation providers</p>
+                </div>
+
+                {/* OpenRouter */}
+                <div className="space-y-2 pb-4 border-b border-outline-variant/15">
+                  <div className="flex items-center justify-between">
+                    <label className="field-label">OpenRouter API Key</label>
+                    <span className={`text-xs px-2 py-0.5 rounded font-semibold ${
+                      settings.openRouterApiKeyMasked ? 'bg-success/10 text-success border border-success/20' : 'bg-surface-container-high text-on-surface-variant border border-outline-variant'
+                    }`}>
+                      {settings.openRouterApiKeyMasked || 'Not set'}
+                    </span>
+                  </div>
+                  <input
+                    type="password"
+                    value={openRouterKey}
+                    onChange={e => setOpenRouterKey(e.target.value)}
+                    placeholder="sk-or-v1-xxxxxxxxxxxxxxxxxxxx"
+                    className="w-full engraved-input text-sm px-3 py-2.5 font-mono"
+                    autoComplete="off"
+                  />
+                  <p className="text-xs text-on-surface-variant">Primary provider. Free tier available.</p>
+                </div>
+
+                {/* DeepSeek */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="field-label">DeepSeek API Key</label>
+                    <span className={`text-xs px-2 py-0.5 rounded font-semibold ${
+                      settings.deepSeekApiKeyMasked ? 'bg-success/10 text-success border border-success/20' : 'bg-surface-container-high text-on-surface-variant border border-outline-variant'
+                    }`}>
+                      {settings.deepSeekApiKeyMasked || 'Not set'}
+                    </span>
+                  </div>
+                  <input
+                    type="password"
+                    value={deepSeekKey}
+                    onChange={e => setDeepSeekKey(e.target.value)}
+                    placeholder="sk-xxxxxxxxxxxxxxxxxxxx"
+                    className="w-full engraved-input text-sm px-3 py-2.5 font-mono"
+                    autoComplete="off"
+                  />
+                  <p className="text-xs text-on-surface-variant">Paid fallback provider.</p>
+                </div>
+              </div>
+
+              {/* Token Usage */}
+              <div className="grid sm:grid-cols-2 gap-4">
+                <div className="bg-surface-container rounded-lg p-5">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-on-surface-variant mb-2">Free Tier Usage</p>
+                  <p className="text-3xl font-bold text-primary">{(tokenSummary?.free.totalTokens ?? 0).toLocaleString()}</p>
+                  <p className="text-xs text-on-surface-variant mt-1">tokens used</p>
+                </div>
+                <div className="bg-surface-container rounded-lg p-5">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-on-surface-variant mb-2">DeepSeek Paid</p>
+                  <p className="text-3xl font-bold text-warning">{(tokenSummary?.paid.totalTokens ?? 0).toLocaleString()}</p>
+                  <p className="text-xs text-on-surface-variant mt-1">
+                    tokens · <span className="text-warning font-semibold">${tokenSummary?.deepSeekEstimatedCostUsd ?? 0} USD</span>
+                  </p>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* RULES TAB */}
+          {activeTab === 'rules' && (
+            <div className="bg-surface-container rounded-lg p-6 space-y-5">
+              <div>
+                <h2 className="text-sm font-semibold text-on-surface">Skip Rules Engine</h2>
+                <p className="text-xs text-on-surface-variant mt-0.5">Configure when to skip translation automatically</p>
+              </div>
+              <div className="space-y-5">
+                {ruleDefinitions.map(def => {
+                  const idx     = settings.rules.findIndex(r => r.id === def.id);
+                  const enabled = idx >= 0 ? settings.rules[idx].enabled : def.enabled;
+                  return (
+                    <Toggle
+                      key={def.id}
+                      checked={enabled}
+                      onChange={v => {
+                        const updated = [...settings.rules];
+                        if (idx >= 0) updated[idx] = { ...updated[idx], enabled: v };
+                        else updated.push({ id: def.id, enabled: v });
+                        setSettings({ ...settings, rules: updated });
+                      }}
+                      label={def.label}
+                      description={def.description}
+                    />
+                  );
+                })}
+              </div>
             </div>
-            <input
-              placeholder="Add pattern (e.g. /pre-rolls/)"
-              className="w-full engraved-input text-[10px] font-mono p-4 rounded-lg text-on-surface"
-              onBlur={(event) => {
-                const tokens = event.target.value
-                  .split(',')
-                  .map((entry) => entry.trim())
-                  .filter((entry) => entry.length > 0);
-                if (tokens.length > 0) {
-                  setSettings({ ...settings, pathContainsExclusions: [...settings.pathContainsExclusions, ...tokens] });
-                }
-              }}
-            />
-          </section>
+          )}
+
+          {/* ADVANCED TAB */}
+          {activeTab === 'advanced' && (
+            <>
+              <div className="bg-surface-container rounded-lg p-6 space-y-4">
+                <div>
+                  <h2 className="text-sm font-semibold text-on-surface">Performance</h2>
+                  <p className="text-xs text-on-surface-variant mt-0.5">Scan and processing settings</p>
+                </div>
+                <div className="grid sm:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="field-label">Scan Cache TTL (minutes)</label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={settings.scanCacheTtlMinutes}
+                      onChange={e => setSettings({ ...settings, scanCacheTtlMinutes: Number(e.target.value) })}
+                      className="w-full engraved-input text-sm px-3 py-2"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="field-label">Concurrency</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={10}
+                      value={settings.concurrency}
+                      onChange={e => setSettings({ ...settings, concurrency: Number(e.target.value) })}
+                      className="w-full engraved-input text-sm px-3 py-2"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="field-label">Max File Size (bytes)</label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={settings.fileTooLargeBytes ?? ''}
+                      onChange={e => setSettings({ ...settings, fileTooLargeBytes: e.target.value ? Number(e.target.value) : undefined })}
+                      placeholder="No limit"
+                      className="w-full engraved-input text-sm px-3 py-2"
+                    />
+                    <p className="text-xs text-on-surface-variant">Files larger than this will be skipped</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Path Exclusions */}
+              <div className="bg-surface-container rounded-lg p-6 space-y-4">
+                <div>
+                  <h2 className="text-sm font-semibold text-on-surface">Path Exclusions</h2>
+                  <p className="text-xs text-on-surface-variant mt-0.5">Files containing these patterns will be skipped</p>
+                </div>
+                <div className="flex flex-wrap gap-2 min-h-8">
+                  {settings.pathContainsExclusions.map((entry, idx) => (
+                    <span
+                      key={idx}
+                      className="flex items-center gap-1.5 bg-surface-container-high border border-outline-variant/30 px-2.5 py-1 rounded text-xs font-mono text-on-surface"
+                    >
+                      {entry}
+                      <button
+                        onClick={() => {
+                          const updated = settings.pathContainsExclusions.filter((_, i) => i !== idx);
+                          setSettings({ ...settings, pathContainsExclusions: updated });
+                        }}
+                        className="text-on-surface-variant hover:text-error transition-colors"
+                      >
+                        <span className="material-symbols-outlined text-[14px]">close</span>
+                      </button>
+                    </span>
+                  ))}
+                  {settings.pathContainsExclusions.length === 0 && (
+                    <span className="text-xs text-on-surface-variant/50">No exclusions configured</span>
+                  )}
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    value={newExclusion}
+                    onChange={e => setNewExclusion(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' && newExclusion.trim()) {
+                        setSettings({ ...settings, pathContainsExclusions: [...settings.pathContainsExclusions, newExclusion.trim()] });
+                        setNewExclusion('');
+                      }
+                    }}
+                    placeholder="e.g. /pre-rolls/ then press Enter"
+                    className="flex-1 engraved-input text-sm px-3 py-2 font-mono"
+                  />
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    iconLeft="add"
+                    onClick={() => {
+                      if (newExclusion.trim()) {
+                        setSettings({ ...settings, pathContainsExclusions: [...settings.pathContainsExclusions, newExclusion.trim()] });
+                        setNewExclusion('');
+                      }
+                    }}
+                  >
+                    Add
+                  </Button>
+                </div>
+              </div>
+            </>
+          )}
+
         </div>
       </div>
 
       {/* Footer Actions */}
-      <footer className="flex items-center justify-between pt-4">
-        <div className="flex gap-4">
+      <div className="flex items-center justify-between pt-4 border-t border-outline-variant/15">
+        <div className="flex gap-3">
           <button
             onClick={() => void apiPost('/library/rescan').then(load)}
-            className="text-on-surface-variant hover:text-primary transition-colors text-[10px] font-black tracking-[0.2em] uppercase"
+            className="text-xs text-on-surface-variant hover:text-on-surface transition-colors flex items-center gap-1.5"
           >
-            RESCAN LIBRARY
+            <span className="material-symbols-outlined text-[16px]">refresh</span>
+            Rescan Library
           </button>
-        </div>
-        <div className="flex gap-4">
           <button
             onClick={() => void reset()}
-            className="bg-surface-container-high px-6 py-2.5 rounded text-xs font-bold tracking-widest text-on-surface hover:bg-surface-variant transition-colors"
+            className="text-xs text-on-surface-variant hover:text-error transition-colors flex items-center gap-1.5"
           >
-            RESET TO DEFAULTS
-          </button>
-          <button
-            onClick={() => void save()}
-            className="bg-gradient-to-br from-primary to-primary-container px-8 py-2.5 rounded text-xs font-black tracking-widest text-on-primary-container shadow-[0_0_15px_rgba(47,217,244,0.3)] hover:brightness-110 transition-all"
-          >
-            SAVE SETTINGS
+            <span className="material-symbols-outlined text-[16px]">restart_alt</span>
+            Reset to Defaults
           </button>
         </div>
-      </footer>
+        <Button
+          variant="primary"
+          loading={saving}
+          iconLeft={saving ? undefined : 'save'}
+          onClick={() => void save()}
+        >
+          {saving ? 'Saving…' : 'Save Settings'}
+        </Button>
+      </div>
     </section>
   );
 }

@@ -5,6 +5,8 @@ export type JobPhase =
   | 'active'
   | 'extracting'
   | 'translating'
+  | 'validating'
+  | 'correcting'
   | 'writing'
   | 'completed'
   | 'failed';

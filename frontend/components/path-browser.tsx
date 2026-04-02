@@ -116,7 +116,7 @@ export function PathBrowser({ value, onChange, placeholder = "Select path..." }:
           onChange={handleInputChange}
           onFocus={handleOpen}
           placeholder={placeholder}
-          className="w-full engraved-input text-sm p-4 pr-10 rounded-lg text-on-surface"
+          className="w-full engraved-input text-sm px-3 py-2.5 pr-10 text-on-surface"
         />
         <span 
           className="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 text-on-surface-variant cursor-pointer"

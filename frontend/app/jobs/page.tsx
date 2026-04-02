@@ -1,16 +1,20 @@
 'use client';
 
 import Link from 'next/link';
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiGet, apiPost, API_URL } from '@/lib/api';
 import { type JobResult } from '@/lib/types';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { EmptyState } from '@/components/ui/empty-state';
+import { ProgressBar } from '@/components/ui/progress-bar';
+import { useToast } from '@/components/ui/toast';
 
 interface LiveEvent {
   phase: string;
   progressPercent: number;
   message: string;
   timestamp: string;
-  details?: any;
 }
 
 interface LogEntry {
@@ -19,516 +23,401 @@ interface LogEntry {
   phase: string;
   message: string;
   timestamp: string;
-  details?: any;
+  details?: unknown;
+}
+
+function formatElapsed(ms: number): string {
+  if (ms <= 0) return '—';
+  const s = Math.floor(ms / 1000);
+  const m = Math.floor(s / 60);
+  return m > 0 ? `${m}m ${s % 60}s` : `${s}s`;
+}
+
+const PHASE_CONFIG: Record<string, { variant: 'primary' | 'secondary' | 'success' | 'warning' | 'error' | 'neutral'; icon: string }> = {
+  waiting:    { variant: 'warning',   icon: 'hourglass_empty' },
+  active:     { variant: 'primary',   icon: 'play_arrow'      },
+  parsing:    { variant: 'secondary', icon: 'description'     },
+  translating:{ variant: 'primary',   icon: 'translate'       },
+  writing:    { variant: 'secondary', icon: 'edit_document'   },
+  completed:  { variant: 'success',   icon: 'check_circle'    },
+  failed:     { variant: 'error',     icon: 'error'           },
+  cancelled:  { variant: 'error',     icon: 'cancel'          },
+};
+
+function PhaseBadge({ phase }: { phase: string }) {
+  const cfg = PHASE_CONFIG[phase.toLowerCase()] ?? { variant: 'neutral' as const, icon: 'radio_button_unchecked' };
+  return (
+    <Badge variant={cfg.variant} icon={cfg.icon}>
+      {phase}
+    </Badge>
+  );
 }
 
 export default function JobsPage() {
-  const [jobs, setJobs] = useState<JobResult[]>([]);
+  const { success: toastSuccess, error: toastError } = useToast();
+  const [jobs, setJobs]             = useState<JobResult[]>([]);
   const [liveEvents, setLiveEvents] = useState<Record<string, LiveEvent>>({});
-  const [expandedFailure, setExpandedFailure] = useState<Record<string, boolean>>({});
-  const [consoleLogs, setConsoleLogs] = useState<LogEntry[]>([]);
-  const [search, setSearch] = useState('');
+  const [expandedError, setExpandedError] = useState<Record<string, boolean>>({});
+  const [logs, setLogs]             = useState<LogEntry[]>([]);
+  const [logsOpen, setLogsOpen]     = useState(true);
+  const [search, setSearch]         = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'waiting' | 'active' | 'completed' | 'failed'>('all');
-  const [now, setNow] = useState<number>(0);
+  const [now, setNow]               = useState(0);
+  const logRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
-    const response = await apiGet<JobResult[]>('/jobs');
-    setJobs(response);
-
-    const logs = await apiGet<LogEntry[]>('/jobs/logs/all');
-    setConsoleLogs(logs.slice(0, 8));
+    const [jobsRes, logsRes] = await Promise.all([
+      apiGet<JobResult[]>('/jobs'),
+      apiGet<LogEntry[]>('/jobs/logs/all').catch(() => [] as LogEntry[]),
+    ]);
+    setJobs(jobsRes);
+    setLogs(logsRes.slice(0, 20));
   }, []);
 
   useEffect(() => {
     void load();
-    const timer = setInterval(() => {
-      void load();
-    }, 3000);
-    return () => clearInterval(timer);
+    const t = setInterval(() => void load(), 4000);
+    return () => clearInterval(t);
   }, [load]);
 
+  /* SSE streams for active jobs */
   useEffect(() => {
-    const activeJobs = jobs.filter((job) => job.state === 'active' || job.state === 'waiting');
-    const sources = activeJobs.map((job) => {
-      const source = new EventSource(`${API_URL}/jobs/${job.id}/stream`);
-      source.onmessage = (event) => {
-        const payload = JSON.parse(event.data) as LiveEvent;
-        setLiveEvents((previous) => ({
-          ...previous,
-          [String(job.id)]: payload,
-        }));
+    const active = jobs.filter(j => j.state === 'active' || j.state === 'waiting');
+    const sources = active.map(job => {
+      const src = new EventSource(`${API_URL}/jobs/${job.id}/stream`);
+      src.onmessage = ev => {
+        const payload = JSON.parse(ev.data) as LiveEvent;
+        setLiveEvents(prev => ({ ...prev, [String(job.id)]: payload }));
       };
-      return source;
+      return src;
     });
-
-    return () => {
-      for (const source of sources) {
-        source.close();
-      }
-    };
+    return () => sources.forEach(s => s.close());
   }, [jobs]);
 
   useEffect(() => {
     setNow(Date.now());
-    const timer = setInterval(() => {
-      setNow(Date.now());
-    }, 1000);
-
-    return () => clearInterval(timer);
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
   }, []);
 
-  const stats = useMemo(() => {
-    return {
-      queued: jobs.filter((job) => job.state === 'waiting').length,
-      active: jobs.filter((job) => job.state === 'active').length,
-      completedToday: jobs.filter((job) => job.state === 'completed').length,
-      failedToday: jobs.filter((job) => job.state === 'failed').length,
-    };
-  }, [jobs]);
+  /* Auto-scroll logs */
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [logs]);
 
-  const filteredJobs = useMemo(() => {
-    return jobs
-      .filter((job) => {
-        if (statusFilter === 'all') {
-          return true;
-        }
+  const stats = useMemo(() => ({
+    queued:    jobs.filter(j => j.state === 'waiting').length,
+    active:    jobs.filter(j => j.state === 'active').length,
+    completed: jobs.filter(j => j.state === 'completed').length,
+    failed:    jobs.filter(j => j.state === 'failed').length,
+  }), [jobs]);
 
-        return job.state === statusFilter;
-      })
-      .filter((job) =>
-        job.data.mediaItemPath.toLowerCase().includes(search.toLowerCase()),
-      );
-  }, [jobs, search, statusFilter]);
+  const filteredJobs = useMemo(() => jobs
+    .filter(j => statusFilter === 'all' ? true : j.state === statusFilter)
+    .filter(j => j.data.mediaItemPath.toLowerCase().includes(search.toLowerCase())),
+    [jobs, search, statusFilter]
+  );
 
   const cancel = async (jobId: string | number) => {
-    await apiPost(`/jobs/${jobId}/cancel`);
-    await load();
+    try {
+      await apiPost(`/jobs/${jobId}/cancel`);
+      toastSuccess('Job cancelled');
+      await load();
+    } catch (err) {
+      toastError(err instanceof Error ? err.message : 'Cancel failed');
+    }
   };
 
   return (
-    <section className="space-y-8">
-      {/* Page Header */}
-      <header className="flex justify-between items-end">
-        <div>
-          <h1 className="text-4xl font-headline font-black uppercase tracking-[0.05em] text-on-surface">
-            Engine Diagnostics
-          </h1>
-          <p className="text-on-surface-variant mt-2 font-body text-sm">
-            Real-time Subsarr processing pipeline monitoring.
-          </p>
-        </div>
-      </header>
-
-      {/* Stats Grid */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <Stat label="QUEUED" value={stats.queued} />
-        <Stat label="ACTIVE" value={stats.active} pulse={stats.active > 0} />
-        <Stat label="COMPLETED" value={stats.completedToday} />
-        <Stat label="FAILED" value={stats.failedToday} error={stats.failedToday > 0} />
+    <section className="space-y-6">
+      {/* Header */}
+      <div>
+        <h1 className="text-2xl font-bold text-on-surface tracking-tight">Jobs</h1>
+        <p className="text-sm text-on-surface-variant mt-0.5">Translation queue and processing status</p>
       </div>
 
-      {/* Jobs Table */}
-      <div className="bg-surface-container rounded-xl">
-        <div className="p-6 border-b border-cyan-400/15">
-          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-            <h2 className="text-lg font-headline font-bold text-on-surface">Live Job Monitor</h2>
-            <div className="flex flex-col gap-2 sm:flex-row">
+      {/* Stats */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <StatCard label="Queued"    value={stats.queued}    icon="hourglass_empty" variant="warning" />
+        <StatCard label="Active"    value={stats.active}    icon="play_arrow"      variant="primary"  pulse={stats.active > 0} />
+        <StatCard label="Completed" value={stats.completed} icon="check_circle"    variant="success" />
+        <StatCard label="Failed"    value={stats.failed}    icon="error"           variant="error" />
+      </div>
+
+      {/* Job Queue */}
+      <div className="bg-surface-container rounded-lg overflow-hidden">
+        <div className="px-4 py-3 border-b border-outline-variant/15 flex flex-col sm:flex-row sm:items-center gap-3 justify-between">
+          <h2 className="text-sm font-semibold text-on-surface">Job Queue</h2>
+          <div className="flex gap-2">
+            <div className="relative">
               <input
                 value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search filename..."
-                className="engraved-input rounded-lg px-4 py-2.5 text-sm text-on-surface w-full sm:w-48"
+                onChange={e => setSearch(e.target.value)}
+                placeholder="Search filename…"
+                className="engraved-input text-sm px-3 py-1.5 pl-8 w-44"
               />
-              <div className="relative">
-                <select
-                  value={statusFilter}
-                  onChange={(event) =>
-                    setStatusFilter(
-                      event.target.value as
-                        | 'all'
-                        | 'waiting'
-                        | 'active'
-                        | 'completed'
-                        | 'failed',
-                    )
-                  }
-                  className="engraved-input rounded-lg px-4 py-2.5 pr-10 text-sm text-on-surface appearance-none bg-surface-container-lowest cursor-pointer transition-all duration-200"
-                >
-                  <option value="all">All statuses</option>
-                  <option value="waiting">Queued</option>
-                  <option value="active">Active</option>
-                  <option value="completed">Completed</option>
-                  <option value="failed">Failed</option>
-                </select>
-                <span className="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 text-on-surface-variant pointer-events-none text-[20px]">
-                  expand_more
-                </span>
-              </div>
+              <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-[16px] text-on-surface-variant pointer-events-none">search</span>
+            </div>
+            <div className="relative">
+              <select
+                value={statusFilter}
+                onChange={e => setStatusFilter(e.target.value as typeof statusFilter)}
+                className="engraved-input text-sm px-3 py-1.5 pr-8 appearance-none cursor-pointer"
+              >
+                <option value="all">All statuses</option>
+                <option value="waiting">Queued</option>
+                <option value="active">Active</option>
+                <option value="completed">Completed</option>
+                <option value="failed">Failed</option>
+              </select>
+              <span className="material-symbols-outlined absolute right-2 top-1/2 -translate-y-1/2 text-[16px] text-on-surface-variant pointer-events-none">expand_more</span>
             </div>
           </div>
         </div>
 
-        {/* Desktop Table View */}
-        <div className="hidden md:block overflow-x-auto">
-          <table className="w-full text-left text-sm min-w-[900px]">
-            <thead className="bg-surface-container-low">
-              <tr>
-                <th className="px-6 py-4 text-xs font-bold uppercase tracking-widest text-on-surface-variant">Filename</th>
-                <th className="px-6 py-4 text-xs font-bold uppercase tracking-widest text-on-surface-variant">Languages</th>
-                <th className="px-6 py-4 text-xs font-bold uppercase tracking-widest text-on-surface-variant">Progress</th>
-                <th className="px-6 py-4 text-xs font-bold uppercase tracking-widest text-on-surface-variant">Phase</th>
-                <th className="px-6 py-4 text-xs font-bold uppercase tracking-widest text-on-surface-variant">Usage</th>
-                <th className="px-6 py-4 text-xs font-bold uppercase tracking-widest text-on-surface-variant">Elapsed</th>
-                <th className="px-6 py-4 text-xs font-bold uppercase tracking-widest text-on-surface-variant">Status</th>
-                <th className="px-6 py-4 text-xs font-bold uppercase tracking-widest text-on-surface-variant w-32">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredJobs.map((job, index) => {
-                const live = liveEvents[String(job.id)];
-                const progress =
-                  live?.progressPercent ?? Number(job.progress ?? 0);
-                const phase = live?.phase ?? job.state;
-                const elapsedMs =
-                  job.processedAt && !job.finishedAt
-                    ? now - job.processedAt
-                    : job.processedAt && job.finishedAt
-                      ? job.finishedAt - job.processedAt
-                      : 0;
-                const filename =
-                  job.data.mediaItemPath.split(/[\\/]/).pop() ??
-                  job.data.mediaItemPath;
+        {filteredJobs.length === 0 ? (
+          <EmptyState
+            icon="work_history"
+            title="No jobs found"
+            description={search || statusFilter !== 'all' ? 'Try adjusting your filters' : 'Queue a translation from the Library to get started'}
+          />
+        ) : (
+          <>
+            {/* Desktop table */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full text-sm data-table min-w-[900px]">
+                <thead>
+                  <tr className="bg-surface-container-low">
+                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-on-surface-variant">File</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-on-surface-variant">Languages</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-on-surface-variant w-40">Progress</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-on-surface-variant">Phase</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-on-surface-variant">Tokens</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-on-surface-variant">Elapsed</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-on-surface-variant">Status</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-on-surface-variant w-32">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredJobs.map((job, idx) => {
+                    const live     = liveEvents[String(job.id)];
+                    const progress = live?.progressPercent ?? Number(job.progress ?? 0);
+                    const phase    = live?.phase ?? job.state;
+                    const elapsedMs = job.processedAt && !job.finishedAt
+                      ? now - job.processedAt
+                      : job.processedAt && job.finishedAt
+                        ? job.finishedAt - job.processedAt
+                        : 0;
+                    const filename = job.data.mediaItemPath.split(/[\\/]/).pop() ?? job.data.mediaItemPath;
 
-                return (
-                  <Fragment key={String(job.id)}>
-                    <tr
-                      className={`border-b border-cyan-400/10 transition-colors ${
-                        index % 2 === 0 ? 'bg-surface-container' : 'bg-surface-container-low'
-                      } hover:bg-primary/5`}
-                    >
-                      <td className="px-6 py-4 max-w-[220px]">
-                        <div className="flex items-center gap-2 min-w-0">
-                          {job.state === 'active' ? (
-                            <span className="inline-block h-2 w-2 flex-shrink-0 animate-pulse rounded-full bg-primary" />
-                          ) : null}
-                          <span className="font-medium text-on-surface truncate" title={filename}>{filename}</span>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 text-on-surface-variant whitespace-nowrap">
-                        {job.data.sourceLanguage.toUpperCase()} →{' '}
-                        {job.data.targetLanguage.toUpperCase()}
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="h-2 w-36 overflow-hidden rounded-full bg-surface-container-highest">
-                          <div
-                            className="h-full bg-primary transition-all"
-                            style={{
-                              width: `${Math.min(Math.max(progress, 0), 100)}%`,
-                            }}
-                          />
-                        </div>
-                        <p className="mt-1 text-xs text-on-surface-variant">{progress}%</p>
-                      </td>
-                      <td className="px-6 py-4 text-on-surface-variant">
-                        <PhaseBadge phase={phase} />
-                      </td>
-                      <td className="px-6 py-4 text-on-surface-variant font-mono text-xs whitespace-nowrap">
-                        {job.returnValue?.usage.totalTokens ?? 0} tokens
-                      </td>
-                      <td className="px-6 py-4 text-on-surface-variant font-mono text-xs whitespace-nowrap">{formatElapsed(elapsedMs)}</td>
-                      <td className="px-6 py-4">
-                        <span
-                          className={`badge ${
-                            job.state === 'completed'
-                              ? 'badge-success'
-                              : job.state === 'failed'
-                                ? 'badge-error'
-                                : job.state === 'active'
-                                  ? 'badge-primary'
-                                  : 'badge-secondary'
-                          }`}
-                        >
-                          {job.state}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-2">
-                          {job.state === 'waiting' || job.state === 'active' || job.state === 'failed' ? (
-                            <button
-                              onClick={() => void cancel(job.id)}
-                              className="bg-error/10 text-error border border-error/30 px-3 py-1.5 rounded text-[10px] font-bold tracking-widest hover:bg-error/20 transition-colors"
-                            >
-                              {job.state === 'failed' ? 'DELETE' : 'CANCEL'}
-                            </button>
-                          ) : null}
-                          {job.state === 'failed' ? (
-                            <button
-                              onClick={() =>
-                                setExpandedFailure((previous) => ({
-                                  ...previous,
-                                  [String(job.id)]: !previous[String(job.id)],
-                                }))
+                    return (
+                      <Fragment key={String(job.id)}>
+                        <tr className={`border-b border-outline-variant/10 ${idx % 2 === 0 ? 'bg-surface-container' : 'bg-surface-container-low'}`}>
+                          <td className="px-4 py-3 max-w-[200px]">
+                            <div className="flex items-center gap-2">
+                              {job.state === 'active' && (
+                                <span className="pulse-dot h-2 w-2 rounded-full bg-primary flex-shrink-0" />
+                              )}
+                              <span className="font-medium text-on-surface truncate text-sm" title={filename}>{filename}</span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-xs font-mono text-on-surface-variant whitespace-nowrap">
+                            {job.data.sourceLanguage.toUpperCase()} → {job.data.targetLanguage.toUpperCase()}
+                          </td>
+                          <td className="px-4 py-3">
+                            <ProgressBar value={progress} showLabel />
+                          </td>
+                          <td className="px-4 py-3">
+                            <PhaseBadge phase={phase} />
+                          </td>
+                          <td className="px-4 py-3 text-xs font-mono text-on-surface-variant whitespace-nowrap">
+                            {job.returnValue?.usage.totalTokens
+                              ? `${(job.returnValue.usage.totalTokens / 1000).toFixed(1)}k`
+                              : '—'
+                            }
+                          </td>
+                          <td className="px-4 py-3 text-xs font-mono text-on-surface-variant whitespace-nowrap">
+                            {formatElapsed(elapsedMs)}
+                          </td>
+                          <td className="px-4 py-3">
+                            <Badge
+                              variant={
+                                job.state === 'completed' ? 'success' :
+                                job.state === 'failed'    ? 'error'   :
+                                job.state === 'active'    ? 'primary' : 'warning'
                               }
-                              className="bg-error/10 text-error border border-error/30 px-3 py-1.5 rounded text-[10px] font-bold tracking-widest hover:bg-error/20 transition-colors"
                             >
-                              {expandedFailure[String(job.id)]
-                                ? 'HIDE'
-                                : 'ERROR'}
-                            </button>
-                          ) : null}
-                          <Link
-                            href={`/archive?jobId=${job.id}`}
-                            className="bg-surface-container-high text-on-surface px-3 py-1.5 rounded text-[10px] font-bold tracking-widest hover:bg-surface-variant transition-colors"
-                          >
-                            LOGS
-                          </Link>
-                        </div>
-                      </td>
-                    </tr>
-                    {job.state === 'failed' && expandedFailure[String(job.id)] ? (
-                      <tr className="border-b border-cyan-400/10">
-                        <td colSpan={8} className="px-6 py-4 bg-surface-container-low">
-                          <pre className="overflow-x-auto rounded-lg bg-surface-container-lowest p-4 text-xs font-mono text-error">
-                            {job.failedReason ?? 'No error details'}
-                          </pre>
-                        </td>
-                      </tr>
-                    ) : null}
-                  </Fragment>
+                              {job.state}
+                            </Badge>
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-1.5">
+                              {(job.state === 'waiting' || job.state === 'active') && (
+                                <Button variant="danger" size="xs" onClick={() => void cancel(job.id)}>
+                                  Cancel
+                                </Button>
+                              )}
+                              {job.state === 'failed' && (
+                                <Button
+                                  variant="danger"
+                                  size="xs"
+                                  onClick={() => setExpandedError(prev => ({ ...prev, [String(job.id)]: !prev[String(job.id)] }))}
+                                >
+                                  {expandedError[String(job.id)] ? 'Hide' : 'Error'}
+                                </Button>
+                              )}
+                              <Link
+                                href={`/archive?jobId=${job.id}`}
+                                className="btn btn-ghost btn-xs"
+                              >
+                                Logs
+                              </Link>
+                            </div>
+                          </td>
+                        </tr>
+                        {job.state === 'failed' && expandedError[String(job.id)] && (
+                          <tr className="border-b border-outline-variant/10">
+                            <td colSpan={8} className="px-4 py-3 bg-surface-container-low">
+                              <pre className="overflow-x-auto rounded bg-surface-container-lowest p-3 text-xs font-mono text-error leading-relaxed">
+                                {job.failedReason ?? 'No error details'}
+                              </pre>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Mobile cards */}
+            <div className="md:hidden divide-y divide-outline-variant/10">
+              {filteredJobs.map(job => {
+                const live     = liveEvents[String(job.id)];
+                const progress = live?.progressPercent ?? Number(job.progress ?? 0);
+                const phase    = live?.phase ?? job.state;
+                const elapsedMs = job.processedAt && !job.finishedAt
+                  ? now - job.processedAt
+                  : job.processedAt && job.finishedAt
+                    ? job.finishedAt - job.processedAt
+                    : 0;
+                const filename = job.data.mediaItemPath.split(/[\\/]/).pop() ?? job.data.mediaItemPath;
+                return (
+                  <div key={String(job.id)} className="p-4 bg-surface-container space-y-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        {job.state === 'active' && <span className="pulse-dot h-2 w-2 rounded-full bg-primary flex-shrink-0" />}
+                        <p className="font-medium text-on-surface text-sm truncate">{filename}</p>
+                      </div>
+                      <Badge
+                        variant={job.state === 'completed' ? 'success' : job.state === 'failed' ? 'error' : job.state === 'active' ? 'primary' : 'warning'}
+                      >
+                        {job.state}
+                      </Badge>
+                    </div>
+                    <div className="text-xs text-on-surface-variant font-mono">
+                      {job.data.sourceLanguage.toUpperCase()} → {job.data.targetLanguage.toUpperCase()} · {formatElapsed(elapsedMs)}
+                    </div>
+                    <ProgressBar value={progress} showLabel />
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <PhaseBadge phase={phase} />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {(job.state === 'waiting' || job.state === 'active') && (
+                        <Button variant="danger" size="xs" onClick={() => void cancel(job.id)}>Cancel</Button>
+                      )}
+                      <Link href={`/archive?jobId=${job.id}`} className="btn btn-ghost btn-xs">Logs</Link>
+                    </div>
+                  </div>
                 );
               })}
-            </tbody>
-          </table>
-        </div>
+            </div>
 
-        {/* Mobile Card View */}
-        <div className="md:hidden divide-y divide-cyan-400/10">
-          {filteredJobs.map((job) => {
-            const live = liveEvents[String(job.id)];
-            const progress =
-              live?.progressPercent ?? Number(job.progress ?? 0);
-            const phase = live?.phase ?? job.state;
-            const elapsedMs =
-              job.processedAt && !job.finishedAt
-                ? now - job.processedAt
-                : job.processedAt && job.finishedAt
-                  ? job.finishedAt - job.processedAt
-                  : 0;
-            const filename =
-              job.data.mediaItemPath.split(/[\\/]/).pop() ??
-              job.data.mediaItemPath;
-
-            return (
-              <div key={String(job.id)} className="p-4 bg-surface-container hover:bg-primary/5 transition-colors">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 min-w-0">
-                      {job.state === 'active' ? (
-                        <span className="inline-block h-2 w-2 flex-shrink-0 animate-pulse rounded-full bg-primary" />
-                      ) : null}
-                      <p className="font-medium text-on-surface text-sm truncate" title={filename}>{filename}</p>
-                    </div>
-                    <p className="text-xs text-on-surface-variant mt-1">
-                      {job.data.sourceLanguage.toUpperCase()} → {job.data.targetLanguage.toUpperCase()}
-                    </p>
-                  </div>
-                  <span
-                    className={`badge text-[10px] flex-shrink-0 ${
-                      job.state === 'completed'
-                        ? 'badge-success'
-                        : job.state === 'failed'
-                          ? 'badge-error'
-                          : job.state === 'active'
-                            ? 'badge-primary'
-                            : 'badge-secondary'
-                    }`}
-                  >
-                    {job.state}
-                  </span>
-                </div>
-
-                <div className="mt-3 flex items-center gap-3">
-                  <div className="flex-1">
-                    <div className="h-2 overflow-hidden rounded-full bg-surface-container-highest">
-                      <div
-                        className="h-full bg-primary transition-all"
-                        style={{ width: `${Math.min(Math.max(progress, 0), 100)}%` }}
-                      />
-                    </div>
-                  </div>
-                  <span className="text-xs text-on-surface-variant font-mono flex-shrink-0">{progress}%</span>
-                </div>
-
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <PhaseBadge phase={phase} />
-                  <span className="text-[10px] text-on-surface-variant font-mono">{formatElapsed(elapsedMs)}</span>
-                  {(job.returnValue?.usage.totalTokens ?? 0) > 0 && (
-                    <span className="text-[10px] text-on-surface-variant font-mono">
-                      {job.returnValue?.usage.totalTokens} tok
-                    </span>
-                  )}
-                </div>
-
-                <div className="mt-3 flex items-center gap-2">
-                  {job.state === 'waiting' || job.state === 'active' || job.state === 'failed' ? (
-                    <button
-                      onClick={() => void cancel(job.id)}
-                      className="bg-error/10 text-error border border-error/30 px-3 py-1.5 rounded text-[10px] font-bold tracking-widest hover:bg-error/20 transition-colors"
-                    >
-                      {job.state === 'failed' ? 'DELETE' : 'CANCEL'}
-                    </button>
-                  ) : null}
-                  {job.state === 'failed' ? (
-                    <button
-                      onClick={() =>
-                        setExpandedFailure((previous) => ({
-                          ...previous,
-                          [String(job.id)]: !previous[String(job.id)],
-                        }))
-                      }
-                      className="bg-error/10 text-error border border-error/30 px-3 py-1.5 rounded text-[10px] font-bold tracking-widest hover:bg-error/20 transition-colors"
-                    >
-                      {expandedFailure[String(job.id)] ? 'HIDE' : 'ERROR'}
-                    </button>
-                  ) : null}
-                  <Link
-                    href={`/archive?jobId=${job.id}`}
-                    className="bg-surface-container-high text-on-surface px-3 py-1.5 rounded text-[10px] font-bold tracking-widest hover:bg-surface-variant transition-colors"
-                  >
-                    LOGS
-                  </Link>
-                </div>
-
-                {job.state === 'failed' && expandedFailure[String(job.id)] ? (
-                  <pre className="mt-3 overflow-x-auto rounded-lg bg-surface-container-lowest p-3 text-xs font-mono text-error">
-                    {job.failedReason ?? 'No error details'}
-                  </pre>
-                ) : null}
-              </div>
-            );
-          })}
-        </div>
-
-        <div className="p-4 border-t border-cyan-400/15">
-          <p className="text-xs text-on-surface-variant">
-            Showing {filteredJobs.length} of {jobs.length} jobs
-          </p>
-        </div>
+            <div className="px-4 py-3 border-t border-outline-variant/15 bg-surface-container-low">
+              <p className="text-xs text-on-surface-variant">
+                Showing {filteredJobs.length} of {jobs.length} jobs
+              </p>
+            </div>
+          </>
+        )}
       </div>
 
-      {/* Bottom Grid: Console + Resources */}
-      <div className="grid gap-6 lg:grid-cols-3">
-        {/* Console Output */}
-        <div className="lg:col-span-2 bg-surface-container rounded-xl p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-bold text-on-surface">Live Console Output</h3>
-            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-primary">AUTOSCROLL ON</span>
-          </div>
-          <div className="max-h-64 overflow-y-auto rounded-lg bg-surface-container-lowest p-4 font-mono text-xs custom-scrollbar">
-            {consoleLogs.map((log) => (
-              <div key={log.id} className="mb-2">
-                <p className="text-on-surface-variant">
-                  <span className="text-on-surface">[{new Date(log.timestamp).toLocaleTimeString()}]</span>{' '}
+      {/* Recent Logs Console */}
+      <div className="bg-surface-container rounded-lg overflow-hidden">
+        <button
+          onClick={() => setLogsOpen(v => !v)}
+          className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-colors"
+        >
+          <span className="flex items-center gap-2">
+            <span className="material-symbols-outlined text-[18px]">terminal</span>
+            Recent Logs
+            <span className="text-[10px] font-mono text-primary/70">LIVE</span>
+          </span>
+          <span
+            className="material-symbols-outlined text-[18px] transition-transform"
+            style={{ transform: logsOpen ? 'rotate(180deg)' : undefined }}
+          >
+            expand_more
+          </span>
+        </button>
+
+        {logsOpen && (
+          <div
+            ref={logRef}
+            className="max-h-56 overflow-y-auto bg-surface-container-lowest px-4 py-3 font-mono text-xs custom-scrollbar border-t border-outline-variant/15"
+          >
+            {logs.length === 0 ? (
+              <p className="text-on-surface-variant/50 text-center py-4">No logs yet</p>
+            ) : (
+              logs.map(log => (
+                <div key={log.id} className="mb-1.5 flex items-start gap-2">
+                  <span className="text-on-surface-variant/50 flex-shrink-0">
+                    {new Date(log.timestamp).toLocaleTimeString()}
+                  </span>
                   <span
-                    className={
-                      log.level === 'error'
-                        ? 'text-error'
-                        : log.level === 'warn'
-                          ? 'text-secondary'
-                          : 'text-primary'
-                    }
+                    className={`flex-shrink-0 font-bold ${
+                      log.level === 'error' ? 'text-error' : log.level === 'warn' ? 'text-warning' : 'text-primary'
+                    }`}
                   >
                     {log.level.toUpperCase()}
                   </span>
-                  : {log.message}
-                </p>
-                {log.details && (
-                  <pre className="mt-1 ml-4 overflow-x-auto rounded bg-surface-container-high p-2 text-[10px] text-on-surface-variant">
-                    {JSON.stringify(log.details, null, 2)}
-                  </pre>
-                )}
-              </div>
-            ))}
+                  <span className="text-on-surface-variant">{log.message}</span>
+                </div>
+              ))
+            )}
           </div>
-        </div>
-
-        {/* Node Resources */}
-        <div className="bg-surface-container rounded-xl p-6">
-          <h3 className="text-sm font-bold text-on-surface mb-6">Node Resources</h3>
-          <Resource label="GPU Cluster A" value="92%" width="92%" />
-          <Resource label="Memory Load" value="44%" width="44%" />
-          <Resource label="Network Egress" value="1.2 GB/s" width="78%" />
-        </div>
+        )}
       </div>
     </section>
   );
 }
 
-function Stat({ label, value, pulse = false, error = false }: { label: string; value: number; pulse?: boolean; error?: boolean }) {
-  return (
-    <div className="bg-surface-container rounded-xl p-6">
-      <p className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">{label}</p>
-      <p
-        className={`mt-2 text-3xl font-black ${
-          error ? 'text-error' : pulse ? 'text-primary animate-pulse' : 'text-on-surface'
-        }`}
-      >
-        {value}
-      </p>
-    </div>
-  );
-}
-
-function Resource({ label, value, width }: { label: string; value: string; width: string }) {
-  return (
-    <div className="mb-4">
-      <div className="mb-2 flex items-center justify-between">
-        <span className="text-xs text-on-surface-variant">{label}</span>
-        <span className="text-xs font-mono font-bold text-on-surface">{value}</span>
-      </div>
-      <div className="h-2 overflow-hidden rounded-full bg-surface-container-highest">
-        <div className="h-full bg-primary" style={{ width }} />
-      </div>
-    </div>
-  );
-}
-
-function formatElapsed(ms: number): string {
-  if (ms <= 0) {
-    return '0s';
-  }
-
-  const seconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
-  if (minutes === 0) {
-    return `${remainingSeconds}s`;
-  }
-
-  return `${minutes}m ${remainingSeconds}s`;
-}
-
-function PhaseBadge({ phase }: { phase: string }) {
-  const phaseConfig: Record<string, { bg: string; text: string; icon?: string }> = {
-    waiting: { bg: 'bg-secondary/20', text: 'text-secondary', icon: 'hourglass_empty' },
-    active: { bg: 'bg-primary/20', text: 'text-primary', icon: 'play_arrow' },
-    parsing: { bg: 'bg-tertiary/20', text: 'text-tertiary', icon: 'description' },
-    translating: { bg: 'bg-primary/30', text: 'text-primary', icon: 'translate' },
-    writing: { bg: 'bg-tertiary/30', text: 'text-tertiary', icon: 'edit_document' },
-    completed: { bg: 'bg-success/20', text: 'text-success', icon: 'check_circle' },
-    failed: { bg: 'bg-error/20', text: 'text-error', icon: 'error' },
-    cancelled: { bg: 'bg-error/10', text: 'text-error', icon: 'cancel' },
+function StatCard({
+  label, value, icon, variant, pulse = false,
+}: {
+  label: string; value: number; icon: string;
+  variant: 'primary' | 'success' | 'warning' | 'error';
+  pulse?: boolean;
+}) {
+  const colors = {
+    primary: 'text-primary',
+    success: 'text-success',
+    warning: 'text-warning',
+    error:   'text-error',
   };
-
-  const normalizedPhase = phase.toLowerCase();
-  const config = phaseConfig[normalizedPhase] ?? { bg: 'bg-surface-variant/50', text: 'text-on-surface-variant' };
-
   return (
-    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold tracking-wider uppercase ${config.bg} ${config.text}`}>
-      {config.icon && (
-        <span className="material-symbols-outlined text-[14px]">{config.icon}</span>
-      )}
-      {phase}
-    </span>
+    <div className="bg-surface-container rounded-lg p-4 flex items-center gap-3">
+      <span
+        className={`material-symbols-outlined text-[24px] ${colors[variant]} ${pulse ? 'animate-pulse' : ''}`}
+        style={{ fontVariationSettings: 'FILL 1' }}
+      >
+        {icon}
+      </span>
+      <div>
+        <p className="text-2xl font-bold text-on-surface">{value}</p>
+        <p className="text-xs text-on-surface-variant font-medium uppercase tracking-wide">{label}</p>
+      </div>
+    </div>
   );
 }
