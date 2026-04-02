@@ -5,6 +5,8 @@ export interface TranslationConfig {
   targetLanguage: string;
   pathContainsExclusions: string[];
   fileTooLargeBytes?: number;
+  /** When set, allows translating even if target language already exists (overwrite or alternate filename). */
+  targetConflictResolution?: 'replace' | 'alternate';
 }
 
 export interface SkipResult {

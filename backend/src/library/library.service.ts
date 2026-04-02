@@ -306,13 +306,21 @@ export class LibraryService implements OnModuleInit {
         const fullPath = path.join(directory, entry.name);
         const extension = path.extname(entry.name);
         const forced = entry.name.endsWith(`.forced${extension}`);
-        const nameWithoutExtension = entry.name.slice(0, -extension.length);
-        const tokens = nameWithoutExtension.split('.');
+        let base = entry.name.slice(0, -extension.length);
+        if (forced) {
+          base = base.slice(0, -'.forced'.length);
+        }
+        const tokens = base.split('.');
+        const tokensLang = [...tokens];
+        while (
+          tokensLang.length >= 2 &&
+          /^\d+$/.test(tokensLang[tokensLang.length - 1] ?? '')
+        ) {
+          tokensLang.pop();
+        }
         const language =
-          tokens.length >= 2
-            ? forced
-              ? tokens[tokens.length - 2]
-              : tokens[tokens.length - 1]
+          tokensLang.length >= 2
+            ? (tokensLang[tokensLang.length - 1] ?? 'und')
             : 'und';
 
         return {

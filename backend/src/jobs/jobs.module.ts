@@ -11,6 +11,7 @@ import { TranslationModule } from '../translation/translation.module';
 import { OutputModule } from '../output/output.module';
 import { JobsEventsService } from './jobs-events.service';
 import { JobLogsService } from './job-logs.service';
+import { JobArchiveService } from './job-archive.service';
 
 @Module({
   imports: [
@@ -29,6 +30,7 @@ import { JobLogsService } from './job-logs.service';
     TranslationJobProcessor,
     JobsEventsService,
     JobLogsService,
+    JobArchiveService,
   ],
   controllers: [JobsController],
   exports: [JobsService],

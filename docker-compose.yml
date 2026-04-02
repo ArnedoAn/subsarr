@@ -17,6 +17,8 @@ services:
       SUBSYNC_TARGET_LANGUAGE: ${SUBSYNC_TARGET_LANGUAGE:-spa}
       SUBSYNC_CONCURRENCY: ${SUBSYNC_CONCURRENCY:-2}
       SUBSYNC_SETTINGS_FILE_PATH: /data/subsync.settings.json
+      # Job history JSONL (same folder as settings parent by default)
+      SUBSYNC_DATA_DIR: /data
       SUBSYNC_PATH_EXCLUSIONS: ${SUBSYNC_PATH_EXCLUSIONS:-}
       SUBSYNC_FILE_TOO_LARGE_BYTES: ${SUBSYNC_FILE_TOO_LARGE_BYTES:-}
       PORT: 3001

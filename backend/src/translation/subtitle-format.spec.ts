@@ -8,6 +8,7 @@ describe('subtitle-format', () => {
     expect(isAssSubtitleCodec('ass')).toBe(true);
     expect(isAssSubtitleCodec('ASS')).toBe(true);
     expect(isAssSubtitleCodec('ssa')).toBe(true);
+    expect(isAssSubtitleCodec('ssa_subtitle')).toBe(true);
     expect(isAssSubtitleCodec('subrip')).toBe(false);
   });
 

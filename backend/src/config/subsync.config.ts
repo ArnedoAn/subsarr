@@ -1,4 +1,5 @@
 import { registerAs } from '@nestjs/config';
+import * as path from 'node:path';
 
 export interface SubsyncEnvConfig {
   openRouterApiKey: string;
@@ -9,6 +10,8 @@ export interface SubsyncEnvConfig {
   targetLanguage: string;
   concurrency: number;
   redisUrl: string;
+  /** Persistent app data (job archive, settings parent dir, etc.). */
+  dataDir: string;
   settingsFilePath: string;
   pathExclusions: string[];
   fileTooLargeBytes?: number;
@@ -48,6 +51,12 @@ const parseOptionalBytes = (value: string | undefined): number | undefined => {
 };
 
 export const subsyncConfig = registerAs('subsync', (): SubsyncEnvConfig => {
+  const settingsFilePath =
+    process.env.SUBSYNC_SETTINGS_FILE_PATH ?? '/data/subsync.settings.json';
+  const dataDir =
+    process.env.SUBSYNC_DATA_DIR?.trim() ||
+    path.dirname(settingsFilePath);
+
   return {
     openRouterApiKey: process.env.OPENROUTER_API_KEY ?? '',
     deepSeekApiKey: process.env.DEEPSEEK_API_KEY ?? '',
@@ -64,8 +73,8 @@ export const subsyncConfig = registerAs('subsync', (): SubsyncEnvConfig => {
     ).toLowerCase(),
     concurrency: parseNumber(process.env.SUBSYNC_CONCURRENCY, 2),
     redisUrl: process.env.REDIS_URL ?? 'redis://redis:6379',
-    settingsFilePath:
-      process.env.SUBSYNC_SETTINGS_FILE_PATH ?? '/data/subsync.settings.json',
+    dataDir,
+    settingsFilePath,
     pathExclusions: (process.env.SUBSYNC_PATH_EXCLUSIONS ?? '')
       .split(',')
       .map((entry) => entry.trim())

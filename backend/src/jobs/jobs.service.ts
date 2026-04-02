@@ -9,6 +9,10 @@ import { LibraryService } from '../library/library.service';
 import { RulesService } from '../rules/rules.service';
 import { JobLogsService } from './job-logs.service';
 import {
+  JobArchiveService,
+  type ArchivedJobSnapshot,
+} from './job-archive.service';
+import {
   type MediaItem,
   type SubtitleTrack,
 } from '../library/media-item.entity';
@@ -26,6 +30,7 @@ export class JobsService {
     private readonly libraryService: LibraryService,
     private readonly rulesService: RulesService,
     private readonly jobLogsService: JobLogsService,
+    private readonly jobArchiveService: JobArchiveService,
   ) {}
 
   async enqueue(dto: CreateJobDto) {
@@ -71,6 +76,7 @@ export class JobsService {
       const ruleResult = await this.rulesService.evaluate(item, {
         sourceLanguage,
         targetLanguage,
+        targetConflictResolution: dto.targetConflictResolution,
       });
 
       if (ruleResult.skip) {
@@ -88,11 +94,14 @@ export class JobsService {
       }
     }
 
+    const pathVariant =
+      dto.targetConflictResolution === 'alternate' ? 'alternate' : 'default';
     const outputPath = this.outputService.buildSubtitlePath(
       item.path,
       targetLanguage,
       false,
       outputExtension,
+      pathVariant,
     );
     const waiting = await this.translationQueue.getWaiting();
     const active = await this.translationQueue.getActive();
@@ -104,12 +113,15 @@ export class JobsService {
       }
 
       const ext = payload.outputExtension ?? 'srt';
+      const variant =
+        payload.targetConflictResolution === 'alternate' ? 'alternate' : 'default';
       return (
         this.outputService.buildSubtitlePath(
           payload.mediaItemPath,
           payload.targetLanguage,
           false,
           ext,
+          variant,
         ) === outputPath
       );
     });
@@ -136,6 +148,7 @@ export class JobsService {
         targetLanguage,
         sourceTrackIndex: dto.sourceTrackIndex,
         outputExtension,
+        targetConflictResolution: dto.targetConflictResolution,
         triggeredBy: dto.triggeredBy,
         forceBypassRules: dto.forceBypassRules ?? false,
         provider: dto.provider,
@@ -182,6 +195,7 @@ export class JobsService {
           triggeredBy: dto.triggeredBy,
           forceBypassRules: dto.forceBypassRules,
           provider: dto.provider,
+          targetConflictResolution: dto.targetConflictResolution,
         });
 
         results.push({
@@ -206,7 +220,7 @@ export class JobsService {
       'completed',
       'failed',
     ]);
-    return Promise.all(
+    const fromRedis = await Promise.all(
       jobs.map(async (job) => ({
         id: job.id,
         data: job.data,
@@ -217,28 +231,61 @@ export class JobsService {
         createdAt: job.timestamp,
         processedAt: job.processedOn,
         finishedAt: job.finishedOn,
+        archived: false,
       })),
     );
+
+    const redisIds = new Set(fromRedis.map((j) => String(j.id)));
+    const archived = await this.jobArchiveService.readSnapshots();
+    const fromArchive = archived
+      .filter((s) => !redisIds.has(s.id))
+      .map((s) => this.mapArchivedToListItem(s));
+
+    const merged = [...fromRedis, ...fromArchive];
+    merged.sort(
+      (a, b) =>
+        (b.finishedAt ?? b.processedAt ?? b.createdAt) -
+        (a.finishedAt ?? a.processedAt ?? a.createdAt),
+    );
+    return merged;
   }
 
   async getById(id: string) {
     const job = await this.translationQueue.getJob(id);
-    if (!job) {
-      throw new NotFoundException(`Job not found: ${id}`);
+    if (job) {
+      return {
+        id: job.id,
+        data: job.data,
+        progress: Number(job.progress()),
+        state: await job.getState(),
+        returnValue: job.returnvalue as JobReturnValue | undefined,
+        failedReason: job.failedReason,
+        createdAt: job.timestamp,
+        processedAt: job.processedOn,
+        finishedAt: job.finishedOn,
+        logs: this.jobLogsService.getByJob(id),
+        archived: false,
+      };
     }
 
-    return {
-      id: job.id,
-      data: job.data,
-      progress: Number(job.progress()),
-      state: await job.getState(),
-      returnValue: job.returnvalue as JobReturnValue | undefined,
-      failedReason: job.failedReason,
-      createdAt: job.timestamp,
-      processedAt: job.processedOn,
-      finishedAt: job.finishedOn,
-      logs: this.jobLogsService.getByJob(id),
-    };
+    const snap = await this.jobArchiveService.getSnapshot(id);
+    if (snap) {
+      return {
+        id: snap.id,
+        data: snap.data,
+        progress: snap.progress,
+        state: snap.state,
+        returnValue: snap.returnValue,
+        failedReason: snap.failedReason,
+        createdAt: snap.createdAt,
+        processedAt: snap.processedAt,
+        finishedAt: snap.finishedAt,
+        logs: snap.logs,
+        archived: true,
+      };
+    }
+
+    throw new NotFoundException(`Job not found: ${id}`);
   }
 
   async cancel(id: string) {
@@ -263,6 +310,10 @@ export class JobsService {
       await job.moveToFailed({ message: 'Job cancelled by user' }, true);
     }
 
+    const jobData = job.data;
+    const createdAt = job.timestamp;
+    const processedAt = job.processedOn;
+
     await job.remove();
 
     this.jobLogsService.append({
@@ -272,10 +323,36 @@ export class JobsService {
       message: `Job cancelled by user (was in state: ${state})`,
     });
 
+    await this.jobArchiveService.appendSnapshot({
+      id: String(id),
+      state: 'cancelled',
+      data: jobData,
+      createdAt,
+      processedAt: processedAt ?? undefined,
+      finishedAt: Date.now(),
+      progress: 100,
+      logs: this.jobLogsService.getByJob(id),
+    });
+
     return {
       id,
       canceled: true,
       previousState: state,
+    };
+  }
+
+  private mapArchivedToListItem(s: ArchivedJobSnapshot) {
+    return {
+      id: s.id,
+      data: s.data,
+      progress: s.progress,
+      state: s.state,
+      returnValue: s.returnValue,
+      failedReason: s.failedReason,
+      createdAt: s.createdAt,
+      processedAt: s.processedAt,
+      finishedAt: s.finishedAt,
+      archived: true,
     };
   }
 

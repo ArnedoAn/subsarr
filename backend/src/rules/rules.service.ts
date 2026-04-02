@@ -31,6 +31,12 @@ export class RulesService {
           'Skips files where an embedded subtitle track exists in the target language.',
         enabled: byId.get('already-has-target-subtitle') ?? true,
         check: (item, config) => {
+          if (
+            config.targetConflictResolution === 'replace' ||
+            config.targetConflictResolution === 'alternate'
+          ) {
+            return { skip: false };
+          }
           const match = item.subtitleTracks.some(
             (track) => track.language === config.targetLanguage,
           );
@@ -49,6 +55,12 @@ export class RulesService {
           'Skips files where an external subtitle already exists for target language.',
         enabled: byId.get('already-has-external-subtitle') ?? true,
         check: (item, config) => {
+          if (
+            config.targetConflictResolution === 'replace' ||
+            config.targetConflictResolution === 'alternate'
+          ) {
+            return { skip: false };
+          }
           const match = item.externalSubtitles.some(
             (sub) => sub.language === config.targetLanguage,
           );
@@ -212,6 +224,7 @@ export class RulesService {
         override?.pathContainsExclusions ?? settings.pathContainsExclusions,
       fileTooLargeBytes:
         override?.fileTooLargeBytes ?? settings.fileTooLargeBytes,
+      targetConflictResolution: override?.targetConflictResolution,
     };
   }
 }

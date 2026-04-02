@@ -19,6 +19,8 @@ export interface TranslationJobPayload {
   sourceTrackIndex: number;
   /** Matches embedded source track codec (srt for subrip etc., ass for ass/ssa). */
   outputExtension?: SubtitleOutputExtension;
+  /** Overwrite existing target file, or write `name.lang.2.ext` instead of `name.lang.ext`. */
+  targetConflictResolution?: 'replace' | 'alternate';
   triggeredBy: 'manual' | 'batch';
   forceBypassRules?: boolean;
   provider?: 'openrouter' | 'deepseek';

@@ -52,4 +52,18 @@ describe('OutputService', () => {
       '/media/Show.S01E01.spa.forced.ass',
     );
   });
+
+  it('builds alternate second-slot path', () => {
+    const service = new OutputService();
+    const result = service.buildSubtitlePath(
+      '/media/Show.S01E01.mkv',
+      'spa',
+      false,
+      'ass',
+      'alternate',
+    );
+    expect(normalizeSeparators(result)).toBe(
+      '/media/Show.S01E01.spa.2.ass',
+    );
+  });
 });

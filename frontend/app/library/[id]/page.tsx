@@ -45,6 +45,9 @@ export default function LibraryItemPage() {
   const [targetLanguage, setTargetLanguage]     = useState('spa');
   const [forceBypass, setForceBypass]           = useState(false);
   const [provider, setProvider]                 = useState<'openrouter' | 'deepseek'>('openrouter');
+  const [targetConflictResolution, setTargetConflictResolution] = useState<
+    'default' | 'replace' | 'alternate'
+  >('default');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -67,7 +70,35 @@ export default function LibraryItemPage() {
 
   useEffect(() => { void load(); }, [load]);
 
-  const isBlocked = useMemo(() => item?.rules.some(r => r.skip) ?? false, [item]);
+  useEffect(() => {
+    setTargetConflictResolution('default');
+  }, [targetLanguage]);
+
+  const isBlocked = useMemo(() => {
+    if (!item) return false;
+    return item.rules.some(rule => {
+      if (!rule.skip) return false;
+      if (
+        targetConflictResolution !== 'default' &&
+        (rule.id === 'already-has-external-subtitle' ||
+          rule.id === 'already-has-target-subtitle')
+      ) {
+        return false;
+      }
+      return true;
+    });
+  }, [item, targetConflictResolution]);
+
+  const hasTargetLanguageConflict = useMemo(
+    () =>
+      item?.rules.some(
+        r =>
+          r.skip &&
+          (r.id === 'already-has-external-subtitle' ||
+            r.id === 'already-has-target-subtitle'),
+      ) ?? false,
+    [item],
+  );
 
   const queue = async () => {
     if (!item || sourceTrackIndex === null) return;
@@ -82,6 +113,10 @@ export default function LibraryItemPage() {
         triggeredBy: 'manual',
         forceBypassRules: forceBypass,
         provider,
+        targetConflictResolution:
+          targetConflictResolution === 'default'
+            ? undefined
+            : targetConflictResolution,
       });
       toastSuccess('Translation job queued');
       await load();
@@ -303,6 +338,43 @@ export default function LibraryItemPage() {
               </div>
             </div>
 
+            {/* Target file already exists */}
+            {hasTargetLanguageConflict && (
+              <div className="rounded-lg border border-outline-variant/30 bg-surface-container-high p-4 space-y-2">
+                <p className="text-xs font-semibold text-on-surface">
+                  Ya hay subtítulo en el idioma de destino
+                </p>
+                <p className="text-[11px] text-on-surface-variant leading-relaxed">
+                  Elige si quieres sobrescribir el archivo existente o guardar una segunda pista como{' '}
+                  <span className="font-mono text-on-surface">.{targetLanguage}.2.srt</span> /{' '}
+                  <span className="font-mono text-on-surface">.{targetLanguage}.2.ass</span>.
+                </p>
+                <div className="flex flex-col gap-2 pt-1">
+                  {(
+                    [
+                      ['default', 'Respetar reglas (no colar si está bloqueado)'],
+                      ['replace', 'Sobrescribir el subtítulo existente'],
+                      ['alternate', 'Crear segundo archivo (.lang.2.ext)'],
+                    ] as const
+                  ).map(([value, label]) => (
+                    <label
+                      key={value}
+                      className="flex items-start gap-2 cursor-pointer text-xs text-on-surface"
+                    >
+                      <input
+                        type="radio"
+                        name="targetConflict"
+                        checked={targetConflictResolution === value}
+                        onChange={() => setTargetConflictResolution(value)}
+                        className="mt-0.5 accent-primary"
+                      />
+                      <span>{label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Rules Check */}
             <div className="bg-surface-container-high rounded-lg p-4 space-y-3">
               <div className="flex items-center justify-between">
@@ -353,7 +425,10 @@ export default function LibraryItemPage() {
             <Button
               variant="primary"
               loading={queuing}
-              disabled={item.subtitleTracks.length === 0 && !forceBypass}
+              disabled={
+                item.subtitleTracks.length === 0 ||
+                (isBlocked && !forceBypass)
+              }
               iconLeft={queuing ? undefined : 'send'}
               onClick={() => void queue()}
               className="w-full justify-center"

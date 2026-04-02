@@ -1,10 +1,11 @@
+import { Logger } from '@nestjs/common';
 import { Processor, Process } from '@nestjs/bull';
 import { type Job } from 'bull';
 import { promises as fs } from 'node:fs';
 import * as jschardet from 'jschardet';
 import iconv from 'iconv-lite';
 import { ExtractionService } from '../extraction/extraction.service';
-import { type TranslationJobPayload } from './jobs.types';
+import { type JobReturnValue, type TranslationJobPayload } from './jobs.types';
 import { LibraryService } from '../library/library.service';
 import { RulesService } from '../rules/rules.service';
 import { SettingsService } from '../settings/settings.service';
@@ -18,9 +19,14 @@ import { JobsEventsService } from './jobs-events.service';
 import { TokenUsageService } from '../settings/token-usage.service';
 import { JobLogsService } from './job-logs.service';
 import { type SubtitleOutputExtension } from '../translation/subtitle-format';
+import { looksLikeAssSubtitle } from '../translation/subtitle-sniff';
+import { type SubtitlePathVariant } from '../output/output.service';
+import { JobArchiveService } from './job-archive.service';
 
 @Processor('translation')
 export class TranslationJobProcessor {
+  private readonly logger = new Logger(TranslationJobProcessor.name);
+
   constructor(
     private readonly extractionService: ExtractionService,
     private readonly libraryService: LibraryService,
@@ -31,6 +37,7 @@ export class TranslationJobProcessor {
     private readonly jobsEventsService: JobsEventsService,
     private readonly tokenUsageService: TokenUsageService,
     private readonly jobLogsService: JobLogsService,
+    private readonly jobArchiveService: JobArchiveService,
   ) {}
 
   @Process({ concurrency: Number(process.env.SUBSYNC_CONCURRENCY ?? 2) })
@@ -38,6 +45,8 @@ export class TranslationJobProcessor {
     const jobId = String(job.id);
     const outputExtension: SubtitleOutputExtension =
       job.data.outputExtension ?? 'srt';
+    const pathVariant: SubtitlePathVariant =
+      job.data.targetConflictResolution === 'alternate' ? 'alternate' : 'default';
 
     const publish = (
       phase:
@@ -86,23 +95,68 @@ export class TranslationJobProcessor {
       }
 
       publish('extracting', 10, 'Extracting subtitle track');
-      const extraction = await this.extractionService.extractSubtitleTrack(
+      let extraction = await this.extractionService.extractSubtitleTrack(
         item.path,
         job.data.sourceTrackIndex,
         outputExtension,
       );
 
-      const rawBuffer = await fs.readFile(extraction.tempFilePath);
-      const detection = jschardet.detect(rawBuffer);
-      const decoded = detection.encoding
-        ? iconv.decode(rawBuffer, detection.encoding)
-        : rawBuffer.toString('utf8');
+      const decodeFile = async (filePath: string): Promise<string> => {
+        const rawBuffer = await fs.readFile(filePath);
+        const detection = jschardet.detect(rawBuffer);
+        return detection.encoding
+          ? iconv.decode(rawBuffer, detection.encoding)
+          : rawBuffer.toString('utf8');
+      };
+
+      let decoded = await decodeFile(extraction.tempFilePath);
+      let effectiveExtension: SubtitleOutputExtension = outputExtension;
+
+      if (outputExtension === 'srt') {
+        try {
+          const assTry = await this.extractionService.extractSubtitleTrack(
+            item.path,
+            job.data.sourceTrackIndex,
+            'ass',
+          );
+          const assDecoded = await decodeFile(assTry.tempFilePath);
+          if (looksLikeAssSubtitle(assDecoded)) {
+            await fs.unlink(extraction.tempFilePath).catch(() => undefined);
+            extraction = assTry;
+            decoded = assDecoded;
+            effectiveExtension = 'ass';
+            this.jobLogsService.append({
+              jobId,
+              level: 'info',
+              phase: 'extracting',
+              message:
+                'ASS stream detected; using ASS pipeline to preserve styles and positioning',
+              details: {},
+            });
+          } else {
+            await fs.unlink(assTry.tempFilePath).catch(() => undefined);
+          }
+        } catch {
+          /* keep SRT extraction */
+        }
+      }
+
+      if (job.data.targetConflictResolution === 'replace') {
+        const existingPath = this.outputService.buildSubtitlePath(
+          item.path,
+          job.data.targetLanguage,
+          false,
+          effectiveExtension,
+          pathVariant,
+        );
+        await fs.unlink(existingPath).catch(() => undefined);
+      }
 
       const settings = await this.settingsService.getSettings();
       let loggedFailedLines = 0;
       const MAX_FAILED_LINES_TO_LOG = 10;
 
-      if (outputExtension === 'ass') {
+      if (effectiveExtension === 'ass') {
         const assParser = new AssParser();
         const assBuilder = new AssBuilder();
         const assLines = assParser.parse(decoded);
@@ -213,7 +267,8 @@ export class TranslationJobProcessor {
           job.data.targetLanguage,
           assBuilder.build(assLines),
           false,
-          outputExtension,
+          effectiveExtension,
+          pathVariant,
         );
 
         this.tokenUsageService.addUsage(translated.tierUsed, translated.usage);
@@ -234,12 +289,14 @@ export class TranslationJobProcessor {
         publish('completed', 100, 'Translation completed');
         this.jobsEventsService.complete(jobId);
 
-        return {
+        const assReturn: JobReturnValue = {
           outputPath,
           tierUsed: translated.tierUsed,
           usage: translated.usage,
           lineCount: dialogueTexts.length,
         };
+        await this.persistJobArchive(job, 'completed', assReturn);
+        return assReturn;
       }
 
       const parser = new SrtParser();
@@ -336,7 +393,8 @@ export class TranslationJobProcessor {
         job.data.targetLanguage,
         builder.build(cues),
         false,
-        outputExtension,
+        effectiveExtension,
+        pathVariant,
       );
 
       this.tokenUsageService.addUsage(translated.tierUsed, translated.usage);
@@ -357,12 +415,14 @@ export class TranslationJobProcessor {
       publish('completed', 100, 'Translation completed');
       this.jobsEventsService.complete(jobId);
 
-      return {
+      const srtReturn: JobReturnValue = {
         outputPath,
         tierUsed: translated.tierUsed,
         usage: translated.usage,
         lineCount: cues.length,
       };
+      await this.persistJobArchive(job, 'completed', srtReturn);
+      return srtReturn;
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Unknown failure';
@@ -371,9 +431,37 @@ export class TranslationJobProcessor {
       console.error(`[Job ${jobId}] Failed: ${message}`);
       console.error(stack);
 
+      await this.persistJobArchive(job, 'failed', undefined, message);
+
       publish('failed', 100, message);
       this.jobsEventsService.complete(jobId);
       throw error;
+    }
+  }
+
+  private async persistJobArchive(
+    job: Job<TranslationJobPayload>,
+    status: 'completed' | 'failed',
+    returnValue?: JobReturnValue,
+    failedReason?: string,
+  ): Promise<void> {
+    try {
+      await this.jobArchiveService.appendSnapshot({
+        id: String(job.id),
+        state: status,
+        data: job.data,
+        createdAt: job.timestamp,
+        processedAt: job.processedOn ?? undefined,
+        finishedAt: Date.now(),
+        progress: 100,
+        returnValue,
+        failedReason,
+        logs: this.jobLogsService.getByJob(String(job.id)),
+      });
+    } catch (err) {
+      this.logger.error(
+        `Failed to write job archive for ${String(job.id)}: ${err}`,
+      );
     }
   }
 }

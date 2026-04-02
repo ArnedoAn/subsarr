@@ -79,4 +79,6 @@ export interface JobResult {
   createdAt: number;
   processedAt?: number;
   finishedAt?: number;
+  /** Solo en jobs cargados desde disco tras reinicio (Redis vacío) */
+  archived?: boolean;
 }

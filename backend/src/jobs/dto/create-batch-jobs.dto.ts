@@ -49,4 +49,8 @@ export class CreateBatchJobsDto {
   @IsOptional()
   @IsIn(['openrouter', 'deepseek'])
   provider?: 'openrouter' | 'deepseek';
+
+  @IsOptional()
+  @IsIn(['replace', 'alternate'])
+  targetConflictResolution?: 'replace' | 'alternate';
 }
