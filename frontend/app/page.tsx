@@ -1,8 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { apiGet, apiPost } from '@/lib/api';
+import { readLibraryFiltersCache, writeLibraryFiltersCache } from '@/lib/library-filters-cache';
 import { type MediaItem, type SettingsPayload } from '@/lib/types';
 import { COMMON_LANGUAGES } from '@/lib/languages';
 import { Badge } from '@/components/ui/badge';
@@ -35,6 +36,59 @@ export default function LibraryPage() {
   const [itemsPerPage, setItemsPerPage] = useState(20);
   const [folderFilter, setFolderFilter] = useState('all');
 
+  const restoredFromCacheRef = useRef(false);
+  const skipFirstPersistRef    = useRef(true);
+
+  useLayoutEffect(() => {
+    const cached = readLibraryFiltersCache();
+    if (!cached) return;
+    restoredFromCacheRef.current = true;
+    setQuery(cached.query);
+    setFolderFilter(cached.folderFilter);
+    setStatusFilter(cached.statusFilter);
+    setMissingTargetOnly(cached.missingTargetOnly);
+    setTargetLangFilter(cached.targetLangFilter);
+    setFiltersOpen(cached.filtersOpen);
+    setCurrentPage(Math.max(1, cached.currentPage));
+    const ipp = cached.itemsPerPage;
+    setItemsPerPage([10, 20, 50, 100].includes(ipp) ? ipp : 20);
+    setBatchSource(cached.batchSource);
+    setBatchTarget(cached.batchTarget);
+    setBatchProvider(cached.batchProvider);
+  }, []);
+
+  useEffect(() => {
+    if (skipFirstPersistRef.current) {
+      skipFirstPersistRef.current = false;
+      return;
+    }
+    writeLibraryFiltersCache({
+      query,
+      folderFilter,
+      statusFilter,
+      missingTargetOnly,
+      targetLangFilter,
+      filtersOpen,
+      currentPage,
+      itemsPerPage,
+      batchSource,
+      batchTarget,
+      batchProvider,
+    });
+  }, [
+    query,
+    folderFilter,
+    statusFilter,
+    missingTargetOnly,
+    targetLangFilter,
+    filtersOpen,
+    currentPage,
+    itemsPerPage,
+    batchSource,
+    batchTarget,
+    batchProvider,
+  ]);
+
   const folders = useMemo(() => {
     const dirs = new Set<string>();
     items.forEach(item => {
@@ -56,7 +110,7 @@ export default function LibraryPage() {
         apiGet<SettingsPayload>('/settings').catch(() => null),
       ]);
       setItems(itemsRes);
-      if (settingsRes) {
+      if (settingsRes && !restoredFromCacheRef.current) {
         setBatchSource(settingsRes.sourceLanguage);
         setBatchTarget(settingsRes.targetLanguage);
         setTargetLangFilter(settingsRes.targetLanguage);

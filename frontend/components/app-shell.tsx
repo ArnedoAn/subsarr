@@ -32,6 +32,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       {/* ─── Top Header ─── */}
       <header className="fixed top-0 left-0 right-0 z-40 h-14 bg-surface-container-low flex items-center px-4 gap-3">
         {/* Hamburger — always visible */}
+        {/* Un solo botón por viewport: .btn fuerza display y anula `hidden` sin !important */}
         <button
           onClick={() => {
             if (window.innerWidth < 768) {
@@ -40,14 +41,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               setCollapsed(v => !v);
             }
           }}
-          className="btn btn-ghost btn-icon md:hidden"
+          className="btn btn-ghost btn-icon md:!hidden"
           aria-label="Toggle navigation"
         >
           <span className="material-symbols-outlined text-[20px]">menu</span>
         </button>
         <button
           onClick={() => setCollapsed(v => !v)}
-          className="btn btn-ghost btn-icon hidden md:flex"
+          className="btn btn-ghost btn-icon !hidden md:!flex"
           aria-label="Toggle sidebar"
         >
           <span className="material-symbols-outlined text-[20px]">menu</span>
