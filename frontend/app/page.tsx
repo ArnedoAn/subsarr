@@ -351,7 +351,7 @@ export default function LibraryPage() {
 
       {/* Table */}
       <div className="bg-surface-container rounded-lg overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto custom-scrollbar">
           <table className="w-full text-sm data-table min-w-[640px]">
             <thead>
               <tr className="bg-surface-container-low border-b border-outline-variant/15">

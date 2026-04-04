@@ -66,6 +66,22 @@ function itemHasTargetLangPresent(item: MediaItem, targetLang: string): boolean 
   );
 }
 
+/** Idioma de pista que tienen *todos* los archivos (intersección); prioriza el orden de COMMON_LANGUAGES. */
+function inferUniversalSourceLanguage(items: MediaItem[]): string | null {
+  if (items.length === 0) return null;
+  if (!items.every((i) => i.subtitleTracks.length > 0)) return null;
+  let common = new Set(items[0].subtitleTracks.map((t) => t.language));
+  for (const it of items.slice(1)) {
+    const langs = new Set(it.subtitleTracks.map((t) => t.language));
+    common = new Set([...common].filter((x) => langs.has(x)));
+  }
+  if (common.size === 0) return null;
+  for (const { code } of COMMON_LANGUAGES) {
+    if (common.has(code)) return code;
+  }
+  return [...common].sort()[0];
+}
+
 const STATUS_LABEL: Record<BatchPreviewRow['status'], string> = {
   ready: 'Listo',
   no_source_track: 'Sin pista origen',
@@ -107,8 +123,11 @@ export function BatchQueueModal({
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [includedReady, setIncludedReady] = useState<Record<string, boolean>>({});
+  /** Incluir archivo en análisis y encolado (subset del lote). */
+  const [lotIncluded, setLotIncluded] = useState<Record<string, boolean>>({});
   const [enqueuing, setEnqueuing] = useState(false);
   const [lastEnqueueErrors, setLastEnqueueErrors] = useState<string[]>([]);
+  const selectAllReadyRef = useRef<HTMLInputElement>(null);
 
   const itemById = useMemo(() => {
     const m = new Map<string, MediaItemWithRuleStatus>();
@@ -121,7 +140,10 @@ export function BatchQueueModal({
     const wasOpen = prevOpenRef.current;
     prevOpenRef.current = open;
     if (open && !wasOpen) {
-      setSourceLanguage(initialSource);
+      const initLot: Record<string, boolean> = {};
+      for (const it of items) initLot[it.id] = true;
+      setLotIncluded(initLot);
+      setSourceLanguage(inferUniversalSourceLanguage(items) ?? initialSource);
       setTargetLanguage(initialTarget);
       setProvider(initialProvider);
       setForceBypass(false);
@@ -131,16 +153,21 @@ export function BatchQueueModal({
       setIncludedReady({});
       setLastEnqueueErrors([]);
     }
-  }, [open, initialSource, initialTarget, initialProvider]);
+  }, [open, initialSource, initialTarget, initialProvider, items]);
 
   useEffect(() => {
     setTargetConflictResolution('default');
   }, [targetLanguage]);
 
+  const itemsInLot = useMemo(
+    () => items.filter((i) => lotIncluded[i.id] !== false),
+    [items, lotIncluded],
+  );
+
   const hasTargetConflictHint = useMemo(
     () =>
-      items.some((it) => itemHasTargetLangPresent(it, targetLanguage)),
-    [items, targetLanguage],
+      itemsInLot.some((it) => itemHasTargetLangPresent(it, targetLanguage)),
+    [itemsInLot, targetLanguage],
   );
 
   const summaryTypes = useMemo(() => {
@@ -156,25 +183,45 @@ export function BatchQueueModal({
   }, [items]);
 
   const folderHint = useMemo(
-    () => commonPathPrefix(items.map((i) => i.path)),
+    () => commonPathPrefix(itemsInLot.map((i) => i.path)),
+    [itemsInLot],
+  );
+
+  const inferredCommonSource = useMemo(
+    () => inferUniversalSourceLanguage(items),
     [items],
   );
 
-  const dominantSig = useMemo(() => dominantTrackSignature(items), [items]);
+  const dominantSig = useMemo(
+    () => dominantTrackSignature(itemsInLot),
+    [itemsInLot],
+  );
   const outlierItems = useMemo(() => {
     if (!dominantSig) return [] as MediaItemWithRuleStatus[];
-    return items.filter(
+    return itemsInLot.filter(
       (it) =>
         it.subtitleTracks.length > 0 && trackSignature(it) !== dominantSig,
     );
-  }, [items, dominantSig]);
+  }, [itemsInLot, dominantSig]);
+
+  const lotSelectedCount = useMemo(
+    () => itemsInLot.length,
+    [itemsInLot],
+  );
 
   const fetchPreview = useCallback(async () => {
     if (items.length === 0) return;
     setPreviewLoading(true);
     setPreviewError(null);
     try {
-      const uniqueIds = [...new Set(items.map(i => i.id))];
+      const uniqueIds = [
+        ...new Set(items.filter((i) => lotIncluded[i.id] !== false).map((i) => i.id)),
+      ];
+      if (uniqueIds.length === 0) {
+        setPreviewRows([]);
+        setIncludedReady({});
+        return;
+      }
       const body = {
         items: uniqueIds.map((mediaItemId) => ({ mediaItemId })),
         sourceLanguage,
@@ -200,6 +247,7 @@ export function BatchQueueModal({
     }
   }, [
     items,
+    lotIncluded,
     sourceLanguage,
     targetLanguage,
     forceBypass,
@@ -233,6 +281,44 @@ export function BatchQueueModal({
     for (const r of previewRows) c[r.status] += 1;
     return c;
   }, [previewRows]);
+
+  const readyPreviewRows = useMemo(
+    () => previewRows?.filter((r) => r.status === 'ready') ?? [],
+    [previewRows],
+  );
+
+  const allReadyChecked = useMemo(() => {
+    if (readyPreviewRows.length === 0) return false;
+    return readyPreviewRows.every((r) => includedReady[r.mediaItemId]);
+  }, [readyPreviewRows, includedReady]);
+
+  useEffect(() => {
+    const el = selectAllReadyRef.current;
+    if (!el || !previewRows) return;
+    const n = readyPreviewRows.length;
+    const sel = readyPreviewRows.filter((r) => includedReady[r.mediaItemId]).length;
+    el.indeterminate = sel > 0 && sel < n;
+  }, [previewRows, readyPreviewRows, includedReady]);
+
+  const toggleLotItem = (id: string) => {
+    setLotIncluded((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const selectAllLot = () => {
+    setLotIncluded((prev) => {
+      const next = { ...prev };
+      for (const it of items) next[it.id] = true;
+      return next;
+    });
+  };
+
+  const deselectAllLot = () => {
+    setLotIncluded((prev) => {
+      const next = { ...prev };
+      for (const it of items) next[it.id] = false;
+      return next;
+    });
+  };
 
   const toggleReady = (id: string) => {
     setIncludedReady((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -324,6 +410,12 @@ export function BatchQueueModal({
               {summaryTypes.total} archivo{summaryTypes.total !== 1 ? 's' : ''} —{' '}
               episodios {summaryTypes.episode}, películas {summaryTypes.movie}
               {summaryTypes.unknown ? `, otros ${summaryTypes.unknown}` : ''}
+              {lotSelectedCount !== summaryTypes.total ? (
+                <span className="text-primary font-medium">
+                  {' '}
+                  · {lotSelectedCount} seleccionado{lotSelectedCount !== 1 ? 's' : ''} para el lote
+                </span>
+              ) : null}
             </p>
             {folderHint ? (
               <p
@@ -344,7 +436,60 @@ export function BatchQueueModal({
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
+        <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 space-y-5 custom-scrollbar">
+          {/* Qué archivos entran en el lote */}
+          <div className="rounded-lg border border-outline-variant/20 bg-surface-container overflow-hidden">
+            <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 border-b border-outline-variant/15 bg-surface-container-low">
+              <h3 className="text-xs font-semibold text-on-surface">
+                Incluir en el lote
+              </h3>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={selectAllLot}
+                  className="text-[11px] text-primary hover:underline"
+                >
+                  Todos
+                </button>
+                <span className="text-on-surface-variant/40">·</span>
+                <button
+                  type="button"
+                  onClick={deselectAllLot}
+                  className="text-[11px] text-on-surface-variant hover:underline"
+                >
+                  Ninguno
+                </button>
+              </div>
+            </div>
+            <ul className="max-h-36 overflow-y-auto custom-scrollbar divide-y divide-outline-variant/10">
+              {items.map(it => (
+                <li
+                  key={it.id}
+                  className="flex items-center gap-2.5 px-3 py-2 hover:bg-surface-container-high/60"
+                >
+                  <input
+                    type="checkbox"
+                    checked={lotIncluded[it.id] !== false}
+                    onChange={() => toggleLotItem(it.id)}
+                    className="h-3.5 w-3.5 accent-primary rounded flex-shrink-0"
+                    aria-label={`Incluir ${it.name}`}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-medium text-on-surface truncate">
+                      {it.name}
+                    </p>
+                    <p
+                      className="text-[10px] font-mono text-on-surface-variant truncate"
+                      title={it.path}
+                    >
+                      {parentDir(it.path)}
+                    </p>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+
           {/* Opciones globales */}
           <div className="grid sm:grid-cols-2 gap-3">
             <div className="space-y-1.5">
@@ -365,6 +510,12 @@ export function BatchQueueModal({
                   expand_more
                 </span>
               </div>
+              {inferredCommonSource !== null &&
+                sourceLanguage === inferredCommonSource && (
+                  <p className="text-[10px] text-on-surface-variant leading-snug">
+                    Todos los archivos tienen al menos una pista en este idioma; se eligió por defecto.
+                  </p>
+                )}
             </div>
             <div className="space-y-1.5">
               <label className="field-label">Idioma destino</label>
@@ -475,7 +626,7 @@ export function BatchQueueModal({
                 <span className="font-mono text-on-surface">{dominantSig}</span>.
                 Estos archivos tienen otro conjunto de idiomas embebidos; revisa la tabla inferior.
               </p>
-              <ul className="text-[11px] font-mono text-on-surface-variant max-h-24 overflow-y-auto space-y-0.5">
+              <ul className="text-[11px] font-mono text-on-surface-variant max-h-24 overflow-y-auto custom-scrollbar space-y-0.5 pr-1">
                 {outlierItems.slice(0, 12).map(it => (
                   <li key={it.id} className="truncate" title={it.path}>
                     {it.name} — {trackSignature(it)}
@@ -518,30 +669,51 @@ export function BatchQueueModal({
               <p className="text-sm text-error py-2">{previewError}</p>
             )}
 
-            {previewRows && !previewLoading && (
+            {previewRows && !previewLoading && previewRows.length === 0 && (
+              <p className="text-sm text-on-surface-variant py-6 text-center rounded-lg border border-dashed border-outline-variant/25 bg-surface-container-low/50 px-3">
+                Ningún archivo incluido en el lote. Marca al menos uno en la lista superior.
+              </p>
+            )}
+
+            {previewRows && !previewLoading && previewRows.length > 0 && (
               <div className="space-y-3">
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap items-center gap-2 text-[11px] text-on-surface-variant">
+                  <span className="mr-1">Listos para encolar:</span>
                   <button
                     type="button"
                     onClick={selectAllReady}
-                    className="text-xs text-primary hover:underline"
+                    className="text-primary hover:underline"
                   >
-                    Marcar todos los listos
+                    Todos
                   </button>
+                  <span>·</span>
                   <button
                     type="button"
                     onClick={deselectAllReady}
-                    className="text-xs text-on-surface-variant hover:underline"
+                    className="hover:underline"
                   >
-                    Desmarcar todos
+                    Ninguno
                   </button>
                 </div>
 
-                <div className="border border-outline-variant/20 rounded-lg overflow-hidden max-h-[280px] overflow-y-auto">
-                  <table className="w-full text-xs data-table">
-                    <thead>
+                <div className="border border-outline-variant/20 rounded-lg max-h-[280px] overflow-auto custom-scrollbar bg-surface-container">
+                  <table className="w-full text-xs data-table min-w-[520px]">
+                    <thead className="sticky top-0 z-[1]">
                       <tr className="bg-surface-container-low border-b border-outline-variant/15">
-                        <th className="px-2 py-2 w-10 text-left" />
+                        <th className="px-2 py-2 w-10 text-left align-middle">
+                          <input
+                            ref={selectAllReadyRef}
+                            type="checkbox"
+                            checked={allReadyChecked}
+                            disabled={readyPreviewRows.length === 0}
+                            onChange={e =>
+                              e.target.checked ? selectAllReady() : deselectAllReady()
+                            }
+                            className="h-3.5 w-3.5 accent-primary rounded"
+                            title="Marcar o desmarcar todos los listos"
+                            aria-label="Marcar o desmarcar todos los listos"
+                          />
+                        </th>
                         <th className="px-2 py-2 text-left">Archivo</th>
                         <th className="px-2 py-2 text-left">Estado</th>
                         <th className="px-2 py-2 text-left">Detalle</th>
@@ -617,7 +789,7 @@ export function BatchQueueModal({
               <p className="text-xs font-semibold text-error">
                 Errores al encolar
               </p>
-              <ul className="text-[11px] text-on-surface-variant list-disc pl-4 max-h-32 overflow-y-auto space-y-0.5">
+              <ul className="text-[11px] text-on-surface-variant list-disc pl-4 max-h-32 overflow-y-auto custom-scrollbar space-y-0.5 pr-1">
                 {lastEnqueueErrors.map((line, i) => (
                   <li key={i}>{line}</li>
                 ))}

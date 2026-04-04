@@ -59,6 +59,9 @@ export default function JobsPage() {
   const [liveEvents, setLiveEvents] = useState<Record<string, LiveEvent>>({});
   const [expandedError, setExpandedError] = useState<Record<string, boolean>>({});
   const [expandedPath, setExpandedPath] = useState<Record<string, boolean>>({});
+  const [expandAllPaths, setExpandAllPaths] = useState(false);
+  /** Con “mostrar todos”, filas que el usuario eligió ocultar. */
+  const [pathHiddenWhenAll, setPathHiddenWhenAll] = useState<Record<string, boolean>>({});
   const [logs, setLogs]             = useState<LogEntry[]>([]);
   const [logsOpen, setLogsOpen]     = useState(true);
   const [search, setSearch]         = useState('');
@@ -119,6 +122,11 @@ export default function JobsPage() {
     [jobs, search, statusFilter]
   );
 
+  const toggleExpandAllPaths = () => {
+    setPathHiddenWhenAll({});
+    setExpandAllPaths(v => !v);
+  };
+
   const cancel = async (jobId: string | number) => {
     try {
       await apiPost(`/jobs/${jobId}/cancel`);
@@ -148,7 +156,24 @@ export default function JobsPage() {
       {/* Job Queue */}
       <div className="bg-surface-container rounded-lg overflow-hidden">
         <div className="px-4 py-3 border-b border-outline-variant/15 flex flex-col sm:flex-row sm:items-center gap-3 justify-between">
-          <h2 className="text-sm font-semibold text-on-surface">Job Queue</h2>
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-sm font-semibold text-on-surface">Job Queue</h2>
+            {filteredJobs.length > 0 && (
+              <button
+                type="button"
+                onClick={() => toggleExpandAllPaths()}
+                className="md:hidden btn btn-ghost btn-xs gap-1 text-on-surface-variant hover:text-on-surface"
+                title={expandAllPaths ? 'Hide all full paths' : 'Show all full paths'}
+                aria-expanded={expandAllPaths}
+                aria-label={expandAllPaths ? 'Hide all full paths' : 'Show all full paths'}
+              >
+                <span className="material-symbols-outlined text-[16px]">
+                  {expandAllPaths ? 'unfold_less' : 'unfold_more'}
+                </span>
+                <span className="text-[11px] font-medium">Full paths</span>
+              </button>
+            )}
+          </div>
           <div className="flex gap-2">
             <div className="relative">
               <input
@@ -185,11 +210,27 @@ export default function JobsPage() {
         ) : (
           <>
             {/* Desktop table */}
-            <div className="hidden md:block overflow-x-auto">
+            <div className="hidden md:block overflow-x-auto custom-scrollbar">
               <table className="w-full text-sm data-table min-w-[900px]">
                 <thead>
                   <tr className="bg-surface-container-low">
-                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-on-surface-variant">File</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-on-surface-variant">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span>File</span>
+                        <button
+                          type="button"
+                          onClick={() => toggleExpandAllPaths()}
+                          className="btn btn-ghost btn-icon btn-xs flex-shrink-0 text-on-surface-variant hover:text-on-surface"
+                          title={expandAllPaths ? 'Hide all full paths' : 'Show all full paths'}
+                          aria-expanded={expandAllPaths}
+                          aria-label={expandAllPaths ? 'Hide all full paths' : 'Show all full paths'}
+                        >
+                          <span className="material-symbols-outlined text-[18px]">
+                            {expandAllPaths ? 'unfold_less' : 'unfold_more'}
+                          </span>
+                        </button>
+                      </div>
+                    </th>
                     <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-on-surface-variant">Languages</th>
                     <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-on-surface-variant w-40">Progress</th>
                     <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-on-surface-variant">Phase</th>
@@ -212,7 +253,9 @@ export default function JobsPage() {
                     const filename = job.data.mediaItemPath.split(/[\\/]/).pop() ?? job.data.mediaItemPath;
                     const fullPath   = job.data.mediaItemPath;
                     const jobKey     = String(job.id);
-                    const pathOpen   = Boolean(expandedPath[jobKey]);
+                    const pathRowVisible = expandAllPaths
+                      ? !pathHiddenWhenAll[jobKey]
+                      : Boolean(expandedPath[jobKey]);
 
                     return (
                       <Fragment key={jobKey}>
@@ -227,16 +270,36 @@ export default function JobsPage() {
                               </span>
                               <button
                                 type="button"
-                                onClick={() =>
-                                  setExpandedPath(prev => ({ ...prev, [jobKey]: !prev[jobKey] }))
-                                }
+                                onClick={() => {
+                                  if (expandAllPaths) {
+                                    setPathHiddenWhenAll(prev => ({
+                                      ...prev,
+                                      [jobKey]: !prev[jobKey],
+                                    }));
+                                  } else {
+                                    setExpandedPath(prev => ({
+                                      ...prev,
+                                      [jobKey]: !prev[jobKey],
+                                    }));
+                                  }
+                                }}
                                 className="btn btn-ghost btn-icon btn-xs flex-shrink-0 text-on-surface-variant hover:text-on-surface"
-                                title={pathOpen ? 'Hide full path' : 'Show full path'}
-                                aria-expanded={pathOpen}
-                                aria-label={pathOpen ? 'Hide full path' : 'Show full path'}
+                                title={
+                                  expandAllPaths
+                                    ? pathRowVisible
+                                      ? 'Hide full path for this row'
+                                      : 'Show full path for this row'
+                                    : pathRowVisible
+                                      ? 'Hide full path'
+                                      : 'Show full path'
+                                }
+                                aria-expanded={pathRowVisible}
+                                aria-label={
+                                  pathRowVisible ? 'Hide full path' : 'Show full path'
+                                }
                               >
                                 <span className="material-symbols-outlined text-[18px]">
-                                  {pathOpen ? 'expand_less' : 'unfold_more'}
+                                  {pathRowVisible ? 'expand_less' : 'unfold_more'}
                                 </span>
                               </button>
                             </div>
@@ -295,7 +358,7 @@ export default function JobsPage() {
                             </div>
                           </td>
                         </tr>
-                        {pathOpen && (
+                        {pathRowVisible && (
                           <tr className="border-b border-outline-variant/10 bg-surface-container-low/80">
                             <td colSpan={8} className="px-4 py-2.5">
                               <p className="text-[11px] font-semibold uppercase tracking-wide text-on-surface-variant mb-1">
@@ -336,8 +399,10 @@ export default function JobsPage() {
                     : 0;
                 const filename = job.data.mediaItemPath.split(/[\\/]/).pop() ?? job.data.mediaItemPath;
                 const fullPath = job.data.mediaItemPath;
-                const jobKey   = String(job.id);
-                const pathOpen = Boolean(expandedPath[jobKey]);
+                const jobKey = String(job.id);
+                const pathRowVisible = expandAllPaths
+                  ? !pathHiddenWhenAll[jobKey]
+                  : Boolean(expandedPath[jobKey]);
                 return (
                   <div key={jobKey} className="p-4 bg-surface-container space-y-3">
                     <div className="flex items-start justify-between gap-2">
@@ -348,15 +413,25 @@ export default function JobsPage() {
                         </p>
                         <button
                           type="button"
-                          onClick={() =>
-                            setExpandedPath(prev => ({ ...prev, [jobKey]: !prev[jobKey] }))
-                          }
+                          onClick={() => {
+                            if (expandAllPaths) {
+                              setPathHiddenWhenAll(prev => ({
+                                ...prev,
+                                [jobKey]: !prev[jobKey],
+                              }));
+                            } else {
+                              setExpandedPath(prev => ({
+                                ...prev,
+                                [jobKey]: !prev[jobKey],
+                              }));
+                            }
+                          }}
                           className="btn btn-ghost btn-icon btn-xs flex-shrink-0 text-on-surface-variant"
-                          aria-expanded={pathOpen}
-                          aria-label={pathOpen ? 'Hide full path' : 'Show full path'}
+                          aria-expanded={pathRowVisible}
+                          aria-label={pathRowVisible ? 'Hide full path' : 'Show full path'}
                         >
                           <span className="material-symbols-outlined text-[18px]">
-                            {pathOpen ? 'expand_less' : 'unfold_more'}
+                            {pathRowVisible ? 'expand_less' : 'unfold_more'}
                           </span>
                         </button>
                       </div>
@@ -366,7 +441,7 @@ export default function JobsPage() {
                         {job.state}
                       </Badge>
                     </div>
-                    {pathOpen && (
+                    {pathRowVisible && (
                       <p className="text-xs font-mono text-on-surface break-all whitespace-pre-wrap leading-relaxed bg-surface-container-low rounded-md px-2 py-2 border border-outline-variant/15">
                         {fullPath}
                       </p>
