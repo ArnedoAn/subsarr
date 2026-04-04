@@ -25,6 +25,9 @@ services:
       SUBSYNC_TARGET_LANGUAGE: ${SUBSYNC_TARGET_LANGUAGE:-spa}
       SUBSYNC_CONCURRENCY: ${SUBSYNC_CONCURRENCY:-2}
       SUBSYNC_SETTINGS_FILE_PATH: /data/subsync.settings.json
+      # Misma carpeta que el volumen :/data (DB SQLite, profiles.json, glossary.json, history/)
+      SUBSYNC_DATA_DIR: /data
+      # Opcional: SUBSYNC_DATABASE_PATH=/data/subsarr.db
       SUBSYNC_PATH_EXCLUSIONS: ${SUBSYNC_PATH_EXCLUSIONS:-}
       SUBSYNC_FILE_TOO_LARGE_BYTES: ${SUBSYNC_FILE_TOO_LARGE_BYTES:-}
       PORT: 3001
