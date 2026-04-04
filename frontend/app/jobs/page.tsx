@@ -58,6 +58,7 @@ export default function JobsPage() {
   const [jobs, setJobs]             = useState<JobResult[]>([]);
   const [liveEvents, setLiveEvents] = useState<Record<string, LiveEvent>>({});
   const [expandedError, setExpandedError] = useState<Record<string, boolean>>({});
+  const [expandedPath, setExpandedPath] = useState<Record<string, boolean>>({});
   const [logs, setLogs]             = useState<LogEntry[]>([]);
   const [logsOpen, setLogsOpen]     = useState(true);
   const [search, setSearch]         = useState('');
@@ -209,16 +210,35 @@ export default function JobsPage() {
                         ? job.finishedAt - job.processedAt
                         : 0;
                     const filename = job.data.mediaItemPath.split(/[\\/]/).pop() ?? job.data.mediaItemPath;
+                    const fullPath   = job.data.mediaItemPath;
+                    const jobKey     = String(job.id);
+                    const pathOpen   = Boolean(expandedPath[jobKey]);
 
                     return (
-                      <Fragment key={String(job.id)}>
+                      <Fragment key={jobKey}>
                         <tr className={`border-b border-outline-variant/10 ${idx % 2 === 0 ? 'bg-surface-container' : 'bg-surface-container-low'}`}>
                           <td className="px-4 py-3 max-w-[200px]">
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-1.5 min-w-0">
                               {job.state === 'active' && (
                                 <span className="pulse-dot h-2 w-2 rounded-full bg-primary flex-shrink-0" />
                               )}
-                              <span className="font-medium text-on-surface truncate text-sm" title={filename}>{filename}</span>
+                              <span className="font-medium text-on-surface truncate text-sm min-w-0 flex-1" title={fullPath}>
+                                {filename}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setExpandedPath(prev => ({ ...prev, [jobKey]: !prev[jobKey] }))
+                                }
+                                className="btn btn-ghost btn-icon btn-xs flex-shrink-0 text-on-surface-variant hover:text-on-surface"
+                                title={pathOpen ? 'Hide full path' : 'Show full path'}
+                                aria-expanded={pathOpen}
+                                aria-label={pathOpen ? 'Hide full path' : 'Show full path'}
+                              >
+                                <span className="material-symbols-outlined text-[18px]">
+                                  {pathOpen ? 'expand_less' : 'unfold_more'}
+                                </span>
+                              </button>
                             </div>
                           </td>
                           <td className="px-4 py-3 text-xs font-mono text-on-surface-variant whitespace-nowrap">
@@ -261,9 +281,9 @@ export default function JobsPage() {
                                 <Button
                                   variant="danger"
                                   size="xs"
-                                  onClick={() => setExpandedError(prev => ({ ...prev, [String(job.id)]: !prev[String(job.id)] }))}
+                                  onClick={() => setExpandedError(prev => ({ ...prev, [jobKey]: !prev[jobKey] }))}
                                 >
-                                  {expandedError[String(job.id)] ? 'Hide' : 'Error'}
+                                  {expandedError[jobKey] ? 'Hide' : 'Error'}
                                 </Button>
                               )}
                               <Link
@@ -275,7 +295,19 @@ export default function JobsPage() {
                             </div>
                           </td>
                         </tr>
-                        {job.state === 'failed' && expandedError[String(job.id)] && (
+                        {pathOpen && (
+                          <tr className="border-b border-outline-variant/10 bg-surface-container-low/80">
+                            <td colSpan={8} className="px-4 py-2.5">
+                              <p className="text-[11px] font-semibold uppercase tracking-wide text-on-surface-variant mb-1">
+                                Full path
+                              </p>
+                              <p className="text-xs font-mono text-on-surface break-all whitespace-pre-wrap leading-relaxed">
+                                {fullPath}
+                              </p>
+                            </td>
+                          </tr>
+                        )}
+                        {job.state === 'failed' && expandedError[jobKey] && (
                           <tr className="border-b border-outline-variant/10">
                             <td colSpan={8} className="px-4 py-3 bg-surface-container-low">
                               <pre className="overflow-x-auto rounded bg-surface-container-lowest p-3 text-xs font-mono text-error leading-relaxed">
@@ -303,12 +335,30 @@ export default function JobsPage() {
                     ? job.finishedAt - job.processedAt
                     : 0;
                 const filename = job.data.mediaItemPath.split(/[\\/]/).pop() ?? job.data.mediaItemPath;
+                const fullPath = job.data.mediaItemPath;
+                const jobKey   = String(job.id);
+                const pathOpen = Boolean(expandedPath[jobKey]);
                 return (
-                  <div key={String(job.id)} className="p-4 bg-surface-container space-y-3">
+                  <div key={jobKey} className="p-4 bg-surface-container space-y-3">
                     <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-center gap-2 min-w-0">
+                      <div className="flex items-center gap-1.5 min-w-0 flex-1">
                         {job.state === 'active' && <span className="pulse-dot h-2 w-2 rounded-full bg-primary flex-shrink-0" />}
-                        <p className="font-medium text-on-surface text-sm truncate">{filename}</p>
+                        <p className="font-medium text-on-surface text-sm truncate min-w-0 flex-1" title={fullPath}>
+                          {filename}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExpandedPath(prev => ({ ...prev, [jobKey]: !prev[jobKey] }))
+                          }
+                          className="btn btn-ghost btn-icon btn-xs flex-shrink-0 text-on-surface-variant"
+                          aria-expanded={pathOpen}
+                          aria-label={pathOpen ? 'Hide full path' : 'Show full path'}
+                        >
+                          <span className="material-symbols-outlined text-[18px]">
+                            {pathOpen ? 'expand_less' : 'unfold_more'}
+                          </span>
+                        </button>
                       </div>
                       <Badge
                         variant={job.state === 'completed' ? 'success' : job.state === 'failed' ? 'error' : job.state === 'active' ? 'primary' : 'warning'}
@@ -316,6 +366,11 @@ export default function JobsPage() {
                         {job.state}
                       </Badge>
                     </div>
+                    {pathOpen && (
+                      <p className="text-xs font-mono text-on-surface break-all whitespace-pre-wrap leading-relaxed bg-surface-container-low rounded-md px-2 py-2 border border-outline-variant/15">
+                        {fullPath}
+                      </p>
+                    )}
                     <div className="text-xs text-on-surface-variant font-mono">
                       {job.data.sourceLanguage.toUpperCase()} → {job.data.targetLanguage.toUpperCase()} · {formatElapsed(elapsedMs)}
                     </div>
