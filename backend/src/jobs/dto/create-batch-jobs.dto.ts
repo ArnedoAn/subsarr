@@ -6,6 +6,7 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  Max,
   Min,
   ValidateNested,
 } from 'class-validator';
@@ -40,8 +41,15 @@ export class CreateBatchJobsDto {
   @IsNotEmpty()
   targetLanguage!: string;
 
-  @IsIn(['manual', 'batch'])
-  triggeredBy!: 'manual' | 'batch';
+  @IsIn(['manual', 'batch', 'auto-scan'])
+  triggeredBy!: 'manual' | 'batch' | 'auto-scan';
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(10)
+  priority?: number;
 
   @IsBoolean()
   forceBypassRules!: boolean;

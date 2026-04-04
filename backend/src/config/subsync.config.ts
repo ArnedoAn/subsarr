@@ -13,6 +13,8 @@ export interface SubsyncEnvConfig {
   /** Persistent app data (job archive, settings parent dir, etc.). */
   dataDir: string;
   settingsFilePath: string;
+  /** SQLite database path (default: dataDir/subsarr.db). */
+  databasePath: string;
   pathExclusions: string[];
   fileTooLargeBytes?: number;
 }
@@ -55,6 +57,9 @@ export const subsyncConfig = registerAs('subsync', (): SubsyncEnvConfig => {
     process.env.SUBSYNC_SETTINGS_FILE_PATH ?? '/data/subsync.settings.json';
   const dataDir =
     process.env.SUBSYNC_DATA_DIR?.trim() || path.dirname(settingsFilePath);
+  const databasePath =
+    process.env.SUBSYNC_DATABASE_PATH?.trim() ||
+    path.join(dataDir, 'subsarr.db');
 
   return {
     openRouterApiKey: process.env.OPENROUTER_API_KEY ?? '',
@@ -74,6 +79,7 @@ export const subsyncConfig = registerAs('subsync', (): SubsyncEnvConfig => {
     redisUrl: process.env.REDIS_URL ?? 'redis://redis:6379',
     dataDir,
     settingsFilePath,
+    databasePath,
     pathExclusions: (process.env.SUBSYNC_PATH_EXCLUSIONS ?? '')
       .split(',')
       .map((entry) => entry.trim())

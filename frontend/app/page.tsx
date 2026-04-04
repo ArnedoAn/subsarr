@@ -34,6 +34,8 @@ export default function LibraryPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(20);
   const [folderFilter, setFolderFilter] = useState('all');
+  const [librarySort, setLibrarySort] = useState<'name' | 'size' | 'date' | 'tracks'>('name');
+  const [libraryOrder, setLibraryOrder] = useState<'asc' | 'desc'>('asc');
 
   const restoredFromCacheRef = useRef(false);
   const skipFirstPersistRef    = useRef(true);
@@ -104,8 +106,13 @@ export default function LibraryPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
+      const libQs = new URLSearchParams({
+        includeRules: 'true',
+        sort: librarySort,
+        order: libraryOrder,
+      });
       const [itemsRes, settingsRes] = await Promise.all([
-        apiGet<MediaItemWithRuleStatus[]>('/library?includeRules=true'),
+        apiGet<MediaItemWithRuleStatus[]>(`/library?${libQs.toString()}`),
         apiGet<SettingsPayload>('/settings').catch(() => null),
       ]);
       setItems(itemsRes);
@@ -119,7 +126,7 @@ export default function LibraryPage() {
     } finally {
       setLoading(false);
     }
-  }, [toastError]);
+  }, [toastError, librarySort, libraryOrder]);
 
   const rescan = useCallback(async () => {
     setRescanning(true);
@@ -280,6 +287,38 @@ export default function LibraryPage() {
                   className="w-full engraved-input text-sm px-3 py-2 pl-9"
                 />
                 <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-[16px] pointer-events-none">search</span>
+              </div>
+
+              <div className="relative">
+                <select
+                  value={librarySort}
+                  onChange={e => {
+                    setLibrarySort(e.target.value as typeof librarySort);
+                    setCurrentPage(1);
+                  }}
+                  className="w-full engraved-input text-sm px-3 py-2 pr-8 appearance-none cursor-pointer"
+                >
+                  <option value="name">Orden: nombre</option>
+                  <option value="size">Orden: tamaño</option>
+                  <option value="date">Orden: fecha</option>
+                  <option value="tracks">Orden: pistas</option>
+                </select>
+                <span className="material-symbols-outlined absolute right-2.5 top-1/2 -translate-y-1/2 text-on-surface-variant text-[16px] pointer-events-none">sort</span>
+              </div>
+
+              <div className="relative">
+                <select
+                  value={libraryOrder}
+                  onChange={e => {
+                    setLibraryOrder(e.target.value as typeof libraryOrder);
+                    setCurrentPage(1);
+                  }}
+                  className="w-full engraved-input text-sm px-3 py-2 pr-8 appearance-none cursor-pointer"
+                >
+                  <option value="asc">Ascendente</option>
+                  <option value="desc">Descendente</option>
+                </select>
+                <span className="material-symbols-outlined absolute right-2.5 top-1/2 -translate-y-1/2 text-on-surface-variant text-[16px] pointer-events-none">expand_more</span>
               </div>
 
               {/* Folder */}

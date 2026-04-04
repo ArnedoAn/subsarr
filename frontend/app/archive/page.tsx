@@ -22,8 +22,15 @@ interface LogEntry {
 
 const ITEMS_PER_PAGE = 50;
 
+type LogsApiResponse = {
+  items: LogEntry[];
+  total: number;
+  nextCursor: string | null;
+};
+
 export default function LogsPage() {
   const [logs, setLogs]           = useState<LogEntry[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
   const [level, setLevel]         = useState<'' | LogLevel>('');
   const [jobId, setJobId]         = useState('');
   const [search, setSearch]       = useState('');
@@ -42,9 +49,11 @@ export default function LogsPage() {
     if (search.trim()) params.set('search', search.trim());
     if (from) params.set('from', new Date(from).toISOString());
     if (to) params.set('to', new Date(to).toISOString());
+    params.set('limit', '500');
     try {
-      const res = await apiGet<LogEntry[]>(`/jobs/logs/all?${params.toString()}`);
-      setLogs(res);
+      const res = await apiGet<LogsApiResponse>(`/jobs/logs/all?${params.toString()}`);
+      setLogs(res.items);
+      setTotalCount(res.total);
       setCurrentPage(1);
     } finally {
       setLoading(false);
@@ -90,7 +99,12 @@ export default function LogsPage() {
       {/* Header */}
       <div>
         <h1 className="text-2xl font-bold text-on-surface tracking-tight">Logs</h1>
-        <p className="text-sm text-on-surface-variant mt-0.5">System event history and diagnostics</p>
+        <p className="text-sm text-on-surface-variant mt-0.5">
+          System event history and diagnostics
+          {totalCount > 0 && (
+            <span className="ml-2 text-xs opacity-80">· {totalCount} entradas (coincidencias)</span>
+          )}
+        </p>
       </div>
 
       {/* Filters */}
@@ -253,7 +267,8 @@ export default function LogsPage() {
         {!loading && logs.length > ITEMS_PER_PAGE && (
           <div className="flex items-center justify-between px-4 py-3 border-t border-outline-variant/15 bg-surface-container-low">
             <span className="text-xs text-on-surface-variant">
-              {(currentPage - 1) * ITEMS_PER_PAGE + 1}–{Math.min(currentPage * ITEMS_PER_PAGE, logs.length)} of {logs.length}
+              {(currentPage - 1) * ITEMS_PER_PAGE + 1}–{Math.min(currentPage * ITEMS_PER_PAGE, logs.length)} de {logs.length}
+              {totalCount > logs.length ? ` (total API ${totalCount})` : ''}
             </span>
             <div className="flex items-center gap-1">
               <button

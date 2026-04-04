@@ -1,9 +1,14 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
-import { promises as fs } from 'node:fs';
-import * as path from 'node:path';
-import { randomUUID } from 'node:crypto';
 import { type SubsyncEnvConfig } from '../config/subsync.config';
+import { SettingEntity } from '../database/entities/setting.entity';
+import {
+  SETTINGS_ROW_ID,
+  entityToRuntime,
+  runtimeToEntity,
+} from './settings.mapper';
 import {
   type PublicSettings,
   type RuleToggleConfig,
@@ -25,7 +30,11 @@ export class SettingsService {
   private readonly logger = new Logger(SettingsService.name);
   private cachedSettings: RuntimeSettings | null = null;
 
-  constructor(private readonly configService: ConfigService) {}
+  constructor(
+    private readonly configService: ConfigService,
+    @InjectRepository(SettingEntity)
+    private readonly settingsRepo: Repository<SettingEntity>,
+  ) {}
 
   async getSettings(): Promise<RuntimeSettings> {
     if (this.cachedSettings) {
@@ -33,8 +42,60 @@ export class SettingsService {
     }
 
     const base = this.loadFromEnv();
-    this.cachedSettings = await this.loadFromFileOrDefault(base);
+    const row = await this.settingsRepo.findOne({
+      where: { id: SETTINGS_ROW_ID },
+    });
+    if (row) {
+      this.cachedSettings = entityToRuntime(row);
+      return this.cachedSettings;
+    }
+
+    const entity = runtimeToEntity(base);
+    await this.settingsRepo.save(entity);
+    this.cachedSettings = base;
     return this.cachedSettings;
+  }
+
+  async fetchAvailableModels(): Promise<{
+    openRouter: string[];
+    deepSeek: string[];
+  }> {
+    const s = await this.getSettings();
+    const out = { openRouter: [] as string[], deepSeek: [] as string[] };
+    if (s.openRouterApiKey?.trim()) {
+      try {
+        const res = await fetch('https://openrouter.ai/api/v1/models', {
+          headers: { Authorization: `Bearer ${s.openRouterApiKey.trim()}` },
+          signal: AbortSignal.timeout(12_000),
+        });
+        const j = (await res.json()) as {
+          data?: Array<{ id?: string }>;
+        };
+        out.openRouter = (j.data ?? [])
+          .map((m) => m.id)
+          .filter((id): id is string => !!id)
+          .slice(0, 120);
+      } catch {
+        /* ignore */
+      }
+    }
+    if (s.deepSeekApiKey?.trim()) {
+      try {
+        const res = await fetch('https://api.deepseek.com/v1/models', {
+          headers: { Authorization: `Bearer ${s.deepSeekApiKey.trim()}` },
+          signal: AbortSignal.timeout(12_000),
+        });
+        const j = (await res.json()) as {
+          data?: Array<{ id?: string }>;
+        };
+        out.deepSeek = (j.data ?? [])
+          .map((m) => m.id)
+          .filter((id): id is string => !!id);
+      } catch {
+        /* ignore */
+      }
+    }
+    return out;
   }
 
   async getPublicSettings(): Promise<PublicSettings> {
@@ -45,18 +106,33 @@ export class SettingsService {
       targetLanguage: settings.targetLanguage,
       openRouterApiKeyMasked: this.maskKey(settings.openRouterApiKey),
       deepSeekApiKeyMasked: this.maskKey(settings.deepSeekApiKey),
+      openRouterModel: settings.openRouterModel,
+      deepSeekModel: settings.deepSeekModel,
       scanCacheTtlMinutes: settings.scanCacheTtlMinutes,
       concurrency: settings.concurrency,
       pathContainsExclusions: settings.pathContainsExclusions,
       fileTooLargeBytes: settings.fileTooLargeBytes,
       translationVerificationEnabled: settings.translationVerificationEnabled,
       rules: settings.rules,
+      autoScanEnabled: settings.autoScanEnabled,
+      autoScanCronExpression: settings.autoScanCronExpression,
+      autoTranslateNewItems: settings.autoTranslateNewItems,
+      telegramBotTokenMasked: this.maskKey(settings.telegramBotToken ?? ''),
+      telegramChatId: settings.telegramChatId,
+      telegramEnabled: settings.telegramEnabled,
+      telegramEvents: settings.telegramEvents,
+      dailyTokenLimitFree: settings.dailyTokenLimitFree,
+      dailyTokenLimitPaid: settings.dailyTokenLimitPaid,
+      monthlyBudgetUsd: settings.monthlyBudgetUsd,
+      jellyfinUrl: settings.jellyfinUrl,
+      jellyfinApiKeyMasked: this.maskKey(settings.jellyfinApiKey ?? ''),
     };
   }
 
   async updateSettings(input: UpdateSettingsInput): Promise<PublicSettings> {
     const current = await this.getSettings();
     const merged: RuntimeSettings = {
+      ...current,
       ...input,
       sourceLanguage: input.sourceLanguage.toLowerCase(),
       targetLanguage: input.targetLanguage.toLowerCase(),
@@ -68,6 +144,9 @@ export class SettingsService {
         input.deepSeekApiKey && input.deepSeekApiKey.trim().length > 0
           ? input.deepSeekApiKey.trim()
           : current.deepSeekApiKey,
+      openRouterModel:
+        input.openRouterModel?.trim() || current.openRouterModel,
+      deepSeekModel: input.deepSeekModel?.trim() || current.deepSeekModel,
       mediaDirs: input.mediaDirs
         .map((entry) => entry.trim())
         .filter((entry) => entry.length > 0),
@@ -76,6 +155,30 @@ export class SettingsService {
         .filter((entry) => entry.length > 0),
       translationVerificationEnabled: input.translationVerificationEnabled,
       rules: input.rules,
+      autoScanEnabled: input.autoScanEnabled ?? current.autoScanEnabled,
+      autoScanCronExpression:
+        input.autoScanCronExpression?.trim() ||
+        current.autoScanCronExpression,
+      autoTranslateNewItems:
+        input.autoTranslateNewItems ?? current.autoTranslateNewItems,
+      telegramBotToken:
+        input.telegramBotToken && input.telegramBotToken.trim().length > 0
+          ? input.telegramBotToken.trim()
+          : current.telegramBotToken,
+      telegramChatId:
+        input.telegramChatId?.trim() || current.telegramChatId,
+      telegramEnabled: input.telegramEnabled ?? current.telegramEnabled,
+      telegramEvents: input.telegramEvents ?? current.telegramEvents,
+      dailyTokenLimitFree:
+        input.dailyTokenLimitFree ?? current.dailyTokenLimitFree,
+      dailyTokenLimitPaid:
+        input.dailyTokenLimitPaid ?? current.dailyTokenLimitPaid,
+      monthlyBudgetUsd: input.monthlyBudgetUsd ?? current.monthlyBudgetUsd,
+      jellyfinUrl: input.jellyfinUrl?.trim() || current.jellyfinUrl,
+      jellyfinApiKey:
+        input.jellyfinApiKey && input.jellyfinApiKey.trim().length > 0
+          ? input.jellyfinApiKey.trim()
+          : current.jellyfinApiKey,
     };
 
     if (input.openRouterApiKey?.trim()) {
@@ -85,14 +188,14 @@ export class SettingsService {
       await this.assertDeepSeekKeyValid(merged.deepSeekApiKey);
     }
 
-    await this.writeSettingsFile(merged);
+    await this.settingsRepo.save(runtimeToEntity(merged));
     this.cachedSettings = merged;
     return this.getPublicSettings();
   }
 
   async resetToEnvDefaults(): Promise<PublicSettings> {
     const defaults = this.loadFromEnv();
-    await this.writeSettingsFile(defaults);
+    await this.settingsRepo.save(runtimeToEntity(defaults));
     this.cachedSettings = defaults;
     return this.getPublicSettings();
   }
@@ -109,74 +212,27 @@ export class SettingsService {
       targetLanguage: config.targetLanguage,
       openRouterApiKey: config.openRouterApiKey,
       deepSeekApiKey: config.deepSeekApiKey,
+      openRouterModel: 'openrouter/free',
+      deepSeekModel: 'deepseek-chat',
       scanCacheTtlMinutes: config.scanCacheTtlMinutes,
       concurrency: config.concurrency,
       pathContainsExclusions: config.pathExclusions,
       fileTooLargeBytes: config.fileTooLargeBytes,
       translationVerificationEnabled: false,
       rules: DEFAULT_RULES,
+      autoScanEnabled: false,
+      autoScanCronExpression: '0 */6 * * *',
+      autoTranslateNewItems: false,
+      telegramBotToken: undefined,
+      telegramChatId: undefined,
+      telegramEnabled: false,
+      telegramEvents: ['job.completed', 'job.failed', 'scan.completed'],
+      dailyTokenLimitFree: undefined,
+      dailyTokenLimitPaid: undefined,
+      monthlyBudgetUsd: undefined,
+      jellyfinUrl: undefined,
+      jellyfinApiKey: undefined,
     };
-  }
-
-  private async loadFromFileOrDefault(
-    defaults: RuntimeSettings,
-  ): Promise<RuntimeSettings> {
-    const config = this.configService.get<SubsyncEnvConfig>('subsync');
-    if (!config) {
-      return defaults;
-    }
-
-    try {
-      const fileContent = await fs.readFile(config.settingsFilePath, 'utf8');
-      const parsed = JSON.parse(fileContent) as Partial<RuntimeSettings>;
-
-      return {
-        ...defaults,
-        ...parsed,
-        sourceLanguage: (
-          parsed.sourceLanguage ?? defaults.sourceLanguage
-        ).toLowerCase(),
-        targetLanguage: (
-          parsed.targetLanguage ?? defaults.targetLanguage
-        ).toLowerCase(),
-        mediaDirs: (parsed.mediaDirs ?? defaults.mediaDirs).filter(
-          (entry) => entry.length > 0,
-        ),
-        pathContainsExclusions: (
-          parsed.pathContainsExclusions ?? defaults.pathContainsExclusions
-        ).filter((entry) => entry.length > 0),
-        translationVerificationEnabled:
-          parsed.translationVerificationEnabled ??
-          defaults.translationVerificationEnabled,
-        rules: parsed.rules ?? defaults.rules,
-      };
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        'code' in error &&
-        (error as NodeJS.ErrnoException).code === 'ENOENT'
-      ) {
-        await this.writeSettingsFile(defaults);
-        return defaults;
-      }
-
-      this.logger.warn('Settings file was invalid, using env defaults');
-      return defaults;
-    }
-  }
-
-  private async writeSettingsFile(settings: RuntimeSettings): Promise<void> {
-    const config = this.configService.get<SubsyncEnvConfig>('subsync');
-    if (!config) {
-      return;
-    }
-
-    const directory = path.dirname(config.settingsFilePath);
-    await fs.mkdir(directory, { recursive: true });
-
-    const tempPath = `${config.settingsFilePath}.${randomUUID()}.tmp`;
-    await fs.writeFile(tempPath, JSON.stringify(settings, null, 2), 'utf8');
-    await fs.rename(tempPath, config.settingsFilePath);
   }
 
   private maskKey(key: string): string {

@@ -15,13 +15,22 @@ interface TokenUsageSummary {
   deepSeekEstimatedCostUsd: number;
 }
 
-type TabId = 'general' | 'apikeys' | 'rules' | 'advanced';
+type TabId = 'general' | 'apikeys' | 'rules' | 'telegram' | 'advanced';
 
 const TABS: { id: TabId; label: string; icon: string }[] = [
   { id: 'general',  label: 'General',  icon: 'tune'         },
   { id: 'apikeys',  label: 'API Keys', icon: 'key'          },
   { id: 'rules',    label: 'Rules',    icon: 'rule'         },
+  { id: 'telegram', label: 'Telegram', icon: 'send'         },
   { id: 'advanced', label: 'Advanced', icon: 'settings'     },
+];
+
+const TELEGRAM_EVENT_OPTIONS: { id: string; label: string }[] = [
+  { id: 'job.completed', label: 'Job completado' },
+  { id: 'job.failed', label: 'Job fallido' },
+  { id: 'scan.completed', label: 'Escaneo automático terminado' },
+  { id: 'quota.warning', label: 'Aviso de cuota (~80%)' },
+  { id: 'quota.reached', label: 'Cuota alcanzada' },
 ];
 
 export default function SettingsPage() {
@@ -29,6 +38,15 @@ export default function SettingsPage() {
   const [settings, setSettings]           = useState<SettingsPayload | null>(null);
   const [openRouterKey, setOpenRouterKey] = useState('');
   const [deepSeekKey, setDeepSeekKey]     = useState('');
+  const [telegramToken, setTelegramToken] = useState('');
+  const [jellyfinKey, setJellyfinKey]     = useState('');
+  const [telegramStatus, setTelegramStatus] = useState<{
+    ok: boolean;
+    botOk: boolean;
+    chatOk: boolean;
+    botUsername?: string;
+    error?: string;
+  } | null>(null);
   const [tokenSummary, setTokenSummary]   = useState<TokenUsageSummary | null>(null);
   const [ruleDefinitions, setRuleDefinitions] = useState<RuleDefinition[]>([]);
   const [activeTab, setActiveTab]         = useState<TabId>('general');
@@ -42,7 +60,18 @@ export default function SettingsPage() {
         apiGet<TokenUsageSummary>('/settings/token-usage'),
         apiGet<RuleDefinition[]>('/rules'),
       ]);
-      setSettings(settingsRes);
+      setSettings({
+        ...settingsRes,
+        openRouterModel: settingsRes.openRouterModel ?? 'openrouter/free',
+        deepSeekModel: settingsRes.deepSeekModel ?? 'deepseek-chat',
+        autoScanCronExpression: settingsRes.autoScanCronExpression ?? '0 */6 * * *',
+        telegramEvents: settingsRes.telegramEvents ?? [],
+        telegramBotTokenMasked: settingsRes.telegramBotTokenMasked ?? '',
+        telegramEnabled: settingsRes.telegramEnabled ?? false,
+        jellyfinApiKeyMasked: settingsRes.jellyfinApiKeyMasked ?? '',
+        autoScanEnabled: settingsRes.autoScanEnabled ?? false,
+        autoTranslateNewItems: settingsRes.autoTranslateNewItems ?? false,
+      });
       setTokenSummary(tokenRes);
       setRuleDefinitions(rulesRes);
     } catch (err) {
@@ -51,6 +80,27 @@ export default function SettingsPage() {
   }, [toastError]);
 
   useEffect(() => { void load(); }, [load]);
+
+  const refreshTelegramStatus = useCallback(async () => {
+    try {
+      const s = await apiGet<{
+        ok: boolean;
+        botOk: boolean;
+        chatOk: boolean;
+        botUsername?: string;
+        error?: string;
+      }>('/settings/telegram/status');
+      setTelegramStatus(s);
+    } catch {
+      setTelegramStatus({ ok: false, botOk: false, chatOk: false, error: 'No se pudo consultar' });
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'telegram') {
+      void refreshTelegramStatus();
+    }
+  }, [activeTab, refreshTelegramStatus]);
 
   const save = async () => {
     if (!settings) return;
@@ -62,15 +112,31 @@ export default function SettingsPage() {
         targetLanguage: settings.targetLanguage,
         openRouterApiKey: openRouterKey || undefined,
         deepSeekApiKey: deepSeekKey || undefined,
+        openRouterModel: settings.openRouterModel,
+        deepSeekModel: settings.deepSeekModel,
         scanCacheTtlMinutes: settings.scanCacheTtlMinutes,
         concurrency: settings.concurrency,
         pathContainsExclusions: settings.pathContainsExclusions,
         fileTooLargeBytes: settings.fileTooLargeBytes,
         translationVerificationEnabled: settings.translationVerificationEnabled,
         rules: settings.rules,
+        autoScanEnabled: settings.autoScanEnabled,
+        autoScanCronExpression: settings.autoScanCronExpression,
+        autoTranslateNewItems: settings.autoTranslateNewItems,
+        telegramBotToken: telegramToken || undefined,
+        telegramChatId: settings.telegramChatId,
+        telegramEnabled: settings.telegramEnabled,
+        telegramEvents: settings.telegramEvents,
+        dailyTokenLimitFree: settings.dailyTokenLimitFree,
+        dailyTokenLimitPaid: settings.dailyTokenLimitPaid,
+        monthlyBudgetUsd: settings.monthlyBudgetUsd,
+        jellyfinUrl: settings.jellyfinUrl,
+        jellyfinApiKey: jellyfinKey || undefined,
       });
       setOpenRouterKey('');
       setDeepSeekKey('');
+      setTelegramToken('');
+      setJellyfinKey('');
       success('Settings saved successfully');
       await load();
     } catch (err) {
@@ -254,6 +320,16 @@ export default function SettingsPage() {
 
                 {/* OpenRouter */}
                 <div className="space-y-2 pb-4 border-b border-outline-variant/15">
+                  <div className="space-y-1.5">
+                    <label className="field-label">OpenRouter model ID</label>
+                    <input
+                      type="text"
+                      value={settings.openRouterModel}
+                      onChange={e => setSettings({ ...settings, openRouterModel: e.target.value })}
+                      placeholder="openrouter/free"
+                      className="w-full engraved-input text-sm px-3 py-2 font-mono"
+                    />
+                  </div>
                   <div className="flex items-center justify-between">
                     <label className="field-label">OpenRouter API Key</label>
                     <span className={`text-xs px-2 py-0.5 rounded font-semibold ${
@@ -275,6 +351,16 @@ export default function SettingsPage() {
 
                 {/* DeepSeek */}
                 <div className="space-y-2">
+                  <div className="space-y-1.5">
+                    <label className="field-label">DeepSeek model ID</label>
+                    <input
+                      type="text"
+                      value={settings.deepSeekModel}
+                      onChange={e => setSettings({ ...settings, deepSeekModel: e.target.value })}
+                      placeholder="deepseek-chat"
+                      className="w-full engraved-input text-sm px-3 py-2 font-mono"
+                    />
+                  </div>
                   <div className="flex items-center justify-between">
                     <label className="field-label">DeepSeek API Key</label>
                     <span className={`text-xs px-2 py-0.5 rounded font-semibold ${
@@ -313,6 +399,127 @@ export default function SettingsPage() {
             </>
           )}
 
+          {/* TELEGRAM TAB */}
+          {activeTab === 'telegram' && (
+            <div className="bg-surface-container rounded-lg p-6 space-y-5">
+              <div>
+                <h2 className="text-sm font-semibold text-on-surface">Telegram Bot</h2>
+                <p className="text-xs text-on-surface-variant mt-0.5">
+                  Notificaciones vía API HTTP (sin dependencias extra). Crea un bot con @BotFather, envía un mensaje al bot y obtén tu chat ID con @userinfobot o{' '}
+                  <code className="font-mono text-[11px]">getUpdates</code>.
+                </p>
+              </div>
+              <Toggle
+                checked={settings.telegramEnabled}
+                onChange={v => setSettings({ ...settings, telegramEnabled: v })}
+                label="Activar notificaciones Telegram"
+              />
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="field-label">Bot token</label>
+                  <span className={`text-xs px-2 py-0.5 rounded font-semibold ${
+                    settings.telegramBotTokenMasked ? 'bg-success/10 text-success border border-success/20' : 'bg-surface-container-high text-on-surface-variant'
+                  }`}>
+                    {settings.telegramBotTokenMasked || 'No configurado'}
+                  </span>
+                </div>
+                <input
+                  type="password"
+                  value={telegramToken}
+                  onChange={e => setTelegramToken(e.target.value)}
+                  placeholder="123456789:AAH..."
+                  className="w-full engraved-input text-sm px-3 py-2 font-mono"
+                  autoComplete="off"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="field-label">Chat ID</label>
+                <input
+                  type="text"
+                  value={settings.telegramChatId ?? ''}
+                  onChange={e => setSettings({ ...settings, telegramChatId: e.target.value })}
+                  placeholder="ej. 123456789 o -100..."
+                  className="w-full engraved-input text-sm px-3 py-2 font-mono"
+                />
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-on-surface-variant mb-2">Eventos</p>
+                <div className="space-y-2">
+                  {TELEGRAM_EVENT_OPTIONS.map(opt => {
+                    const on = settings.telegramEvents.includes(opt.id);
+                    return (
+                      <Toggle
+                        key={opt.id}
+                        checked={on}
+                        onChange={v => {
+                          const next = new Set(settings.telegramEvents);
+                          if (v) {
+                            next.add(opt.id);
+                          } else {
+                            next.delete(opt.id);
+                          }
+                          setSettings({ ...settings, telegramEvents: [...next] });
+                        }}
+                        label={opt.label}
+                      />
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-3 pt-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  iconLeft="send"
+                  onClick={async () => {
+                    try {
+                      const r = await apiPost<{ ok: boolean; error?: string }>('/settings/telegram/test');
+                      if (r.ok) {
+                        success('Mensaje de prueba enviado');
+                      } else {
+                        toastError(r.error ?? 'Fallo al enviar');
+                      }
+                    } catch (e) {
+                      toastError(e instanceof Error ? e.message : 'Error');
+                    }
+                  }}
+                >
+                  Enviar prueba
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  iconLeft="refresh"
+                  onClick={() => void refreshTelegramStatus()}
+                >
+                  Comprobar conexión
+                </Button>
+              </div>
+              {telegramStatus && (
+                <div
+                  className={`rounded-lg border px-3 py-2 text-sm ${
+                    telegramStatus.ok
+                      ? 'border-success/30 bg-success/8 text-success'
+                      : 'border-warning/30 bg-warning/8 text-warning'
+                  }`}
+                >
+                  <p className="font-medium">
+                    {telegramStatus.ok ? 'Conexión OK' : 'Conexión incompleta'}
+                  </p>
+                  {telegramStatus.botUsername && (
+                    <p className="text-xs mt-1 opacity-90">@{telegramStatus.botUsername}</p>
+                  )}
+                  {telegramStatus.error && (
+                    <p className="text-xs mt-1">{telegramStatus.error}</p>
+                  )}
+                  <p className="text-[11px] mt-1 opacity-80">
+                    Bot: {telegramStatus.botOk ? 'sí' : 'no'} · Chat: {telegramStatus.chatOk ? 'sí' : 'no'}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* RULES TAB */}
           {activeTab === 'rules' && (
             <div className="bg-surface-container rounded-lg p-6 space-y-5">
@@ -346,6 +553,38 @@ export default function SettingsPage() {
           {/* ADVANCED TAB */}
           {activeTab === 'advanced' && (
             <>
+              <div className="bg-surface-container rounded-lg p-6 space-y-4">
+                <div>
+                  <h2 className="text-sm font-semibold text-on-surface">Library auto-scan</h2>
+                  <p className="text-xs text-on-surface-variant mt-0.5">
+                    Re-scan media folders on a schedule (cron). New files detected vs the previous cache can be auto-queued for translation.
+                  </p>
+                </div>
+                <Toggle
+                  checked={settings.autoScanEnabled}
+                  onChange={v => setSettings({ ...settings, autoScanEnabled: v })}
+                  label="Enable scheduled rescan"
+                  description="Uses the cron expression below (server timezone)."
+                />
+                <div className="space-y-1.5">
+                  <label className="field-label">Cron expression</label>
+                  <input
+                    type="text"
+                    value={settings.autoScanCronExpression}
+                    onChange={e => setSettings({ ...settings, autoScanCronExpression: e.target.value })}
+                    placeholder="0 */6 * * *"
+                    className="w-full engraved-input text-sm px-3 py-2 font-mono"
+                  />
+                  <p className="text-xs text-on-surface-variant">Example: every 6 hours → <code className="font-mono">0 */6 * * *</code></p>
+                </div>
+                <Toggle
+                  checked={settings.autoTranslateNewItems}
+                  onChange={v => setSettings({ ...settings, autoTranslateNewItems: v })}
+                  label="Auto-translate new items"
+                  description="When a scheduled scan finds files that were not in the library cache, enqueue translation if rules allow (embedded source track must match default source language)."
+                />
+              </div>
+
               <div className="bg-surface-container rounded-lg p-6 space-y-4">
                 <div>
                   <h2 className="text-sm font-semibold text-on-surface">Performance</h2>
