@@ -132,10 +132,7 @@ export class TranslationVerificationService {
         continue;
       }
 
-      if (
-        source.trim().length < 5 ||
-        NON_TRANSLATABLE_RE.test(source.trim())
-      ) {
+      if (source.trim().length < 5 || NON_TRANSLATABLE_RE.test(source.trim())) {
         continue;
       }
 
@@ -188,18 +185,18 @@ export class TranslationVerificationService {
   ): void {
     if (failedLines.length === 0) return;
 
-    logFn(
-      `Found ${failedLines.length} line(s) with translation issues`,
-    );
+    logFn(`Found ${failedLines.length} line(s) with translation issues`);
 
     const toLog = failedLines.slice(0, 20);
     for (const line of toLog) {
-      const src = line.sourceText.length > 80
-        ? line.sourceText.substring(0, 80) + '...'
-        : line.sourceText;
-      const tgt = line.translatedText.length > 80
-        ? line.translatedText.substring(0, 80) + '...'
-        : line.translatedText;
+      const src =
+        line.sourceText.length > 80
+          ? line.sourceText.substring(0, 80) + '...'
+          : line.sourceText;
+      const tgt =
+        line.translatedText.length > 80
+          ? line.translatedText.substring(0, 80) + '...'
+          : line.translatedText;
       logFn(
         `  Line ${line.index + 1}: [${line.reason}]${line.detectedLanguage ? ` (detected: ${line.detectedLanguage})` : ''} src="${src}" tgt="${tgt}"`,
       );

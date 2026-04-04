@@ -46,7 +46,9 @@ export class TranslationJobProcessor {
     const outputExtension: SubtitleOutputExtension =
       job.data.outputExtension ?? 'srt';
     const pathVariant: SubtitlePathVariant =
-      job.data.targetConflictResolution === 'alternate' ? 'alternate' : 'default';
+      job.data.targetConflictResolution === 'alternate'
+        ? 'alternate'
+        : 'default';
 
     const publish = (
       phase:
@@ -196,7 +198,12 @@ export class TranslationJobProcessor {
             onProgress: (info) => {
               const overallProgress =
                 25 + Math.floor((info.progressPercent / 100) * 65);
-              publish('translating', overallProgress, info.message, info.details);
+              publish(
+                'translating',
+                overallProgress,
+                info.message,
+                info.details,
+              );
             },
             onLogFailedLine: (failed) => {
               if (loggedFailedLines >= MAX_FAILED_LINES_TO_LOG) {
@@ -251,8 +258,7 @@ export class TranslationJobProcessor {
             line.text = translated.lines[dialogueIndex];
             dialogueIndex += 1;
             const progress =
-              25 +
-              Math.floor((dialogueIndex / dialogueTexts.length) * 65);
+              25 + Math.floor((dialogueIndex / dialogueTexts.length) * 65);
             void job.progress(progress);
           }
         }
@@ -382,8 +388,7 @@ export class TranslationJobProcessor {
 
       for (let index = 0; index < cues.length; index += 1) {
         cues[index].text = translated.lines[index];
-        const progress =
-          25 + Math.floor(((index + 1) / cues.length) * 65);
+        const progress = 25 + Math.floor(((index + 1) / cues.length) * 65);
         void job.progress(progress);
       }
 

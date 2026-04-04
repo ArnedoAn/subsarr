@@ -54,8 +54,7 @@ export const subsyncConfig = registerAs('subsync', (): SubsyncEnvConfig => {
   const settingsFilePath =
     process.env.SUBSYNC_SETTINGS_FILE_PATH ?? '/data/subsync.settings.json';
   const dataDir =
-    process.env.SUBSYNC_DATA_DIR?.trim() ||
-    path.dirname(settingsFilePath);
+    process.env.SUBSYNC_DATA_DIR?.trim() || path.dirname(settingsFilePath);
 
   return {
     openRouterApiKey: process.env.OPENROUTER_API_KEY ?? '',

@@ -97,6 +97,81 @@
   --inverse-on-surface:          #565555;
 }
 
+
+
+/* === Light theme (toggle: html.light) === */
+html.light {
+  --background:                  #f4f4f5;
+  --surface:                     #fafafa;
+  --surface-dim:                 #f4f4f5;
+  --surface-bright:              #ffffff;
+  --surface-container-lowest:    #ffffff;
+  --surface-container-low:       #f4f4f5;
+  --surface-container:           #ececee;
+  --surface-container-high:      #e4e4e7;
+  --surface-container-highest:   #dcdce0;
+  --surface-variant:             #e4e4e7;
+  --surface-tint:                #5c5fc7;
+
+  --primary:                     #4338ca;
+  --primary-container:           #c7d2fe;
+  --primary-fixed:               #e0e7ff;
+  --primary-fixed-dim:           #c7d2fe;
+  --primary-dim:                 #3730a3;
+  --on-primary:                  #ffffff;
+  --on-primary-container:        #1e1b4b;
+  --on-primary-fixed:            #1e1b4b;
+  --on-primary-fixed-variant:    #4338ca;
+  --inverse-primary:             #a5b4fc;
+
+  --secondary:                   #57534e;
+  --secondary-container:         #e7e5e4;
+  --secondary-fixed:             #f5f5f4;
+  --secondary-fixed-dim:         #e7e5e4;
+  --secondary-dim:               #44403c;
+  --on-secondary:                #ffffff;
+  --on-secondary-container:      #292524;
+  --on-secondary-fixed:          #1c1917;
+  --on-secondary-fixed-variant:  #57534e;
+
+  --tertiary:                    #6d28d9;
+  --tertiary-container:          #ede9fe;
+  --tertiary-fixed:              #ede9fe;
+  --tertiary-fixed-dim:          #ddd6fe;
+  --tertiary-dim:                #5b21b6;
+  --on-tertiary:                 #ffffff;
+  --on-tertiary-container:       #3b0764;
+  --on-tertiary-fixed:           #2e1065;
+  --on-tertiary-fixed-variant:   #6d28d9;
+
+  --error:                       #be123c;
+  --error-container:             #ffe4e6;
+  --error-dim:                   #9f1239;
+  --on-error:                    #ffffff;
+  --on-error-container:          #881337;
+
+  --success:                     #15803d;
+  --success-container:           #dcfce7;
+  --on-success:                  #ffffff;
+  --on-success-container:        #14532d;
+
+  --warning:                     #b45309;
+  --warning-container:           #fef3c7;
+  --on-warning:                  #ffffff;
+  --on-warning-container:      #78350f;
+
+  --on-background:               #18181b;
+  --on-surface:                  #18181b;
+  --on-surface-variant:          #52525b;
+  --foreground:                  #18181b;
+
+  --outline:                     #a1a1aa;
+  --outline-variant:             #d4d4d8;
+
+  --inverse-surface:             #27272a;
+  --inverse-on-surface:          #f4f4f5;
+}
+
 @theme inline {
   /* Surface colors */
   --color-background:              var(--background);

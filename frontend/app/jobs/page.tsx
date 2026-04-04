@@ -33,6 +33,34 @@ function formatElapsed(ms: number): string {
   return m > 0 ? `${m}m ${s % 60}s` : `${s}s`;
 }
 
+function formatEtaRemaining(ms: number): string {
+  if (ms <= 0 || !Number.isFinite(ms)) return '';
+  return `≈ ${formatElapsed(ms)} restantes`;
+}
+
+function jobEtaLabel(job: JobResult, progressPct: number, nowMs: number): string | null {
+  if (job.state !== 'active' && job.state !== 'waiting') return null;
+  const start = job.processedAt ?? job.createdAt;
+  if (!start) return null;
+  if (progressPct < 3 || progressPct > 97) return null;
+  const elapsed = nowMs - start;
+  if (elapsed < 2000) return null;
+  const eta = elapsed * (100 / progressPct - 1);
+  if (!Number.isFinite(eta) || eta < 0 || eta > 72 * 3600 * 1000) return null;
+  return formatEtaRemaining(eta);
+}
+
+function tryBrowserNotify(title: string, body: string) {
+  if (typeof document === 'undefined') return;
+  if (document.visibilityState === 'visible') return;
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+  try {
+    new Notification(title, { body, icon: '/favicon.ico' });
+  } catch {
+    /* ignore */
+  }
+}
+
 const PHASE_CONFIG: Record<string, { variant: 'primary' | 'secondary' | 'success' | 'warning' | 'error' | 'neutral'; icon: string }> = {
   waiting:    { variant: 'warning',   icon: 'hourglass_empty' },
   active:     { variant: 'primary',   icon: 'play_arrow'      },
@@ -84,6 +112,7 @@ export default function JobsPage() {
     return () => clearInterval(t);
   }, [load]);
 
+
   /* SSE streams for active jobs */
   useEffect(() => {
     const active = jobs.filter(j => j.state === 'active' || j.state === 'waiting');
@@ -92,6 +121,13 @@ export default function JobsPage() {
       src.onmessage = ev => {
         const payload = JSON.parse(ev.data) as LiveEvent;
         setLiveEvents(prev => ({ ...prev, [String(job.id)]: payload }));
+        const ph = payload.phase.toLowerCase();
+        if (ph === 'completed') {
+          tryBrowserNotify('Traducción lista', payload.message || 'Job completado');
+        }
+        if (ph === 'failed') {
+          tryBrowserNotify('Traducción fallida', payload.message || 'Error en el job');
+        }
       };
       return src;
     });
@@ -128,12 +164,23 @@ export default function JobsPage() {
   };
 
   const cancel = async (jobId: string | number) => {
+    if (!window.confirm('¿Cancelar este job?')) return;
     try {
       await apiPost(`/jobs/${jobId}/cancel`);
       toastSuccess('Job cancelled');
       await load();
     } catch (err) {
       toastError(err instanceof Error ? err.message : 'Cancel failed');
+    }
+  };
+
+  const retryJob = async (jobId: string | number) => {
+    try {
+      await apiPost(`/jobs/${jobId}/retry`);
+      toastSuccess('Job re-enqueued');
+      await load();
+    } catch (err) {
+      toastError(err instanceof Error ? err.message : 'Retry failed');
     }
   };
 
@@ -250,6 +297,7 @@ export default function JobsPage() {
                       : job.processedAt && job.finishedAt
                         ? job.finishedAt - job.processedAt
                         : 0;
+                    const etaText = jobEtaLabel(job, progress, now);
                     const filename = job.data.mediaItemPath.split(/[\\/]/).pop() ?? job.data.mediaItemPath;
                     const fullPath   = job.data.mediaItemPath;
                     const jobKey     = String(job.id);
@@ -308,7 +356,12 @@ export default function JobsPage() {
                             {job.data.sourceLanguage.toUpperCase()} → {job.data.targetLanguage.toUpperCase()}
                           </td>
                           <td className="px-4 py-3">
-                            <ProgressBar value={progress} showLabel />
+                            <div className="space-y-0.5 min-w-[100px]">
+                              <ProgressBar value={progress} showLabel />
+                              {etaText && (
+                                <p className="text-[10px] font-mono text-on-surface-variant">{etaText}</p>
+                              )}
+                            </div>
                           </td>
                           <td className="px-4 py-3">
                             <PhaseBadge phase={phase} />
@@ -338,6 +391,11 @@ export default function JobsPage() {
                               {(job.state === 'waiting' || job.state === 'active') && (
                                 <Button variant="danger" size="xs" onClick={() => void cancel(job.id)}>
                                   Cancel
+                                </Button>
+                              )}
+                              {(job.state === 'failed' || job.state === 'cancelled') && (
+                                <Button variant="secondary" size="xs" onClick={() => void retryJob(job.id)}>
+                                  Retry
                                 </Button>
                               )}
                               {job.state === 'failed' && (
@@ -397,6 +455,7 @@ export default function JobsPage() {
                   : job.processedAt && job.finishedAt
                     ? job.finishedAt - job.processedAt
                     : 0;
+                const etaText = jobEtaLabel(job, progress, now);
                 const filename = job.data.mediaItemPath.split(/[\\/]/).pop() ?? job.data.mediaItemPath;
                 const fullPath = job.data.mediaItemPath;
                 const jobKey = String(job.id);
@@ -449,13 +508,21 @@ export default function JobsPage() {
                     <div className="text-xs text-on-surface-variant font-mono">
                       {job.data.sourceLanguage.toUpperCase()} → {job.data.targetLanguage.toUpperCase()} · {formatElapsed(elapsedMs)}
                     </div>
-                    <ProgressBar value={progress} showLabel />
+                    <div className="space-y-0.5">
+                      <ProgressBar value={progress} showLabel />
+                      {etaText && (
+                        <p className="text-[10px] font-mono text-on-surface-variant">{etaText}</p>
+                      )}
+                    </div>
                     <div className="flex items-center gap-2 flex-wrap">
                       <PhaseBadge phase={phase} />
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       {(job.state === 'waiting' || job.state === 'active') && (
                         <Button variant="danger" size="xs" onClick={() => void cancel(job.id)}>Cancel</Button>
+                      )}
+                      {(job.state === 'failed' || job.state === 'cancelled') && (
+                        <Button variant="secondary" size="xs" onClick={() => void retryJob(job.id)}>Retry</Button>
                       )}
                       <Link href={`/archive?jobId=${job.id}`} className="btn btn-ghost btn-xs">Logs</Link>
                     </div>

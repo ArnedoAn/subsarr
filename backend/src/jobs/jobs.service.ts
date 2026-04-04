@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bull';
 import type { Queue } from 'bull';
 import { type CreateJobDto } from './dto/create-job.dto';
@@ -49,11 +54,18 @@ export class JobsService {
       const sourceTrack = this.validateSourceTrack(item, dto.sourceTrackIndex);
       outputExtension = subtitleOutputExtensionFromCodec(sourceTrack.codec);
       if (sourceTrack.language !== sourceLanguage) {
-        throw new Error(
+        throw new BadRequestException(
           `Source language ${sourceLanguage} does not match selected track language ${sourceTrack.language}`,
         );
       }
     } catch (error) {
+      if (
+        error instanceof BadRequestException ||
+        error instanceof ConflictException ||
+        error instanceof NotFoundException
+      ) {
+        throw error;
+      }
       this.jobLogsService.append({
         level: 'warn',
         phase: 'precheck',
@@ -66,11 +78,17 @@ export class JobsService {
           sourceTrackIndex: dto.sourceTrackIndex,
         },
       });
-      throw error;
+      throw new BadRequestException(
+        error instanceof Error
+          ? error.message
+          : 'Job payload validation failed before enqueue',
+      );
     }
 
     if (!item) {
-      throw new Error('Media item was not resolved during precheck');
+      throw new BadRequestException(
+        'Media item was not resolved during precheck',
+      );
     }
 
     if (!dto.forceBypassRules) {
@@ -89,7 +107,7 @@ export class JobsService {
             mediaItemId: dto.mediaItemId,
           },
         });
-        throw new Error(
+        throw new BadRequestException(
           `Job blocked by rules: ${ruleResult.reason ?? 'Blocked by rule'}`,
         );
       }
@@ -115,7 +133,9 @@ export class JobsService {
 
       const ext = payload.outputExtension ?? 'srt';
       const variant =
-        payload.targetConflictResolution === 'alternate' ? 'alternate' : 'default';
+        payload.targetConflictResolution === 'alternate'
+          ? 'alternate'
+          : 'default';
       return (
         this.outputService.buildSubtitlePath(
           payload.mediaItemPath,
@@ -136,7 +156,7 @@ export class JobsService {
           mediaItemId: dto.mediaItemId,
         },
       });
-      throw new Error(
+      throw new ConflictException(
         `A job is already processing this output path: ${outputPath}`,
       );
     }
@@ -157,6 +177,8 @@ export class JobsService {
       {
         removeOnComplete: 200,
         removeOnFail: 200,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 10000 },
       },
     );
 
@@ -375,7 +397,7 @@ export class JobsService {
     const allowedStates = ['waiting', 'delayed', 'failed', 'active'];
 
     if (!allowedStates.includes(state)) {
-      throw new Error(
+      throw new BadRequestException(
         `Cannot cancel job in state: ${state}. Allowed states: ${allowedStates.join(', ')}`,
       );
     }
@@ -447,10 +469,50 @@ export class JobsService {
     return this.jobLogsService.query(query);
   }
 
+  async retryFromArchive(id: string) {
+    const snap = await this.jobArchiveService.getSnapshot(id);
+    if (!snap) {
+      throw new NotFoundException(`Job not found: ${id}`);
+    }
+    if (snap.state !== 'failed' && snap.state !== 'cancelled') {
+      throw new BadRequestException(
+        `Only failed or cancelled jobs can be retried (state: ${snap.state})`,
+      );
+    }
+    const d = snap.data;
+    return this.enqueue({
+      mediaItemId: d.mediaItemId,
+      mediaItemPath: d.mediaItemPath,
+      sourceLanguage: d.sourceLanguage,
+      targetLanguage: d.targetLanguage,
+      sourceTrackIndex: d.sourceTrackIndex,
+      triggeredBy: d.triggeredBy,
+      forceBypassRules: d.forceBypassRules ?? false,
+      provider: d.provider,
+      targetConflictResolution: d.targetConflictResolution,
+    });
+  }
+
+  async getQueueHealth(): Promise<{
+    ok: boolean;
+    jobCounts?: Record<string, number>;
+    error?: string;
+  }> {
+    try {
+      const jobCounts = await this.translationQueue.getJobCounts();
+      return { ok: true, jobCounts: { ...jobCounts } };
+    } catch (e) {
+      return {
+        ok: false,
+        error: e instanceof Error ? e.message : 'Queue unavailable',
+      };
+    }
+  }
+
   private normalizeLanguage(input: string): string {
     const normalized = input.trim().toLowerCase();
     if (normalized.length === 0) {
-      throw new Error('Language must not be empty');
+      throw new BadRequestException('Language must not be empty');
     }
 
     return normalized;
@@ -458,7 +520,9 @@ export class JobsService {
 
   private validateMediaPath(dto: CreateJobDto, item: MediaItem): void {
     if (dto.mediaItemPath && dto.mediaItemPath !== item.path) {
-      throw new Error('Provided media path does not match media item ID');
+      throw new BadRequestException(
+        'Provided media path does not match media item ID',
+      );
     }
   }
 
@@ -470,7 +534,7 @@ export class JobsService {
       (candidate) => candidate.index === sourceTrackIndex,
     );
     if (!track) {
-      throw new Error(
+      throw new BadRequestException(
         `Source subtitle track index ${sourceTrackIndex} does not exist on media item`,
       );
     }

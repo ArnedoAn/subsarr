@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
@@ -77,6 +77,13 @@ export class SettingsService {
       translationVerificationEnabled: input.translationVerificationEnabled,
       rules: input.rules,
     };
+
+    if (input.openRouterApiKey?.trim()) {
+      await this.assertOpenRouterKeyValid(merged.openRouterApiKey);
+    }
+    if (input.deepSeekApiKey?.trim()) {
+      await this.assertDeepSeekKeyValid(merged.deepSeekApiKey);
+    }
 
     await this.writeSettingsFile(merged);
     this.cachedSettings = merged;
@@ -180,5 +187,65 @@ export class SettingsService {
     const start = key.slice(0, 4);
     const end = key.slice(-4);
     return `${start}****${end}`;
+  }
+
+  private async assertOpenRouterKeyValid(key: string): Promise<void> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15_000);
+    try {
+      const res = await fetch('https://openrouter.ai/api/v1/models', {
+        headers: { Authorization: `Bearer ${key}` },
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        throw new BadRequestException(
+          res.status === 401
+            ? 'OpenRouter API key is invalid or unauthorized'
+            : `OpenRouter validation failed (HTTP ${res.status})`,
+        );
+      }
+    } catch (e) {
+      if (e instanceof BadRequestException) {
+        throw e;
+      }
+      const aborted = e instanceof Error && e.name === 'AbortError';
+      throw new BadRequestException(
+        aborted
+          ? 'OpenRouter validation timed out'
+          : 'Could not reach OpenRouter to validate the API key',
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private async assertDeepSeekKeyValid(key: string): Promise<void> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15_000);
+    try {
+      const res = await fetch('https://api.deepseek.com/v1/models', {
+        headers: { Authorization: `Bearer ${key}` },
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        throw new BadRequestException(
+          res.status === 401
+            ? 'DeepSeek API key is invalid or unauthorized'
+            : `DeepSeek validation failed (HTTP ${res.status})`,
+        );
+      }
+    } catch (e) {
+      if (e instanceof BadRequestException) {
+        throw e;
+      }
+      const aborted = e instanceof Error && e.name === 'AbortError';
+      throw new BadRequestException(
+        aborted
+          ? 'DeepSeek validation timed out'
+          : 'Could not reach DeepSeek to validate the API key',
+      );
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }

@@ -12,6 +12,8 @@ export function isAssSubtitleCodec(codec: string): boolean {
   return ASS_SUBTITLE_CODECS.has(codec.trim().toLowerCase());
 }
 
-export function subtitleOutputExtensionFromCodec(codec: string): SubtitleOutputExtension {
+export function subtitleOutputExtensionFromCodec(
+  codec: string,
+): SubtitleOutputExtension {
   return isAssSubtitleCodec(codec) ? 'ass' : 'srt';
 }

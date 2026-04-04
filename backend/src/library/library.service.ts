@@ -250,7 +250,11 @@ export class LibraryService implements OnModuleInit {
       const timer = setTimeout(() => {
         child.kill('SIGKILL');
         settle(() =>
-          reject(new Error(`ffprobe timed out after ${FFPROBE_TIMEOUT_MS}ms for ${filePath}`)),
+          reject(
+            new Error(
+              `ffprobe timed out after ${FFPROBE_TIMEOUT_MS}ms for ${filePath}`,
+            ),
+          ),
         );
       }, FFPROBE_TIMEOUT_MS);
 
@@ -268,7 +272,9 @@ export class LibraryService implements OnModuleInit {
       child.on('error', (err) => {
         clearTimeout(timer);
         settle(() =>
-          reject(new Error(`ffprobe spawn error for ${filePath}: ${err.message}`)),
+          reject(
+            new Error(`ffprobe spawn error for ${filePath}: ${err.message}`),
+          ),
         );
       });
 

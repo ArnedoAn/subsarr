@@ -3,16 +3,24 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
-import { apiGet, apiPost } from '@/lib/api';
+import { apiGet, apiPost, API_URL } from '@/lib/api';
 import { type JobResult, type MediaItem, type RuleEvaluation } from '@/lib/types';
 import { COMMON_LANGUAGES } from '@/lib/languages';
 import { Badge } from '@/components/ui/badge';
 import { Breadcrumbs } from '@/components/ui/breadcrumbs';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
+import { ProgressBar } from '@/components/ui/progress-bar';
 import { useToast } from '@/components/ui/toast';
 
 interface ItemDetail extends MediaItem { rules: RuleEvaluation[]; }
+
+interface LiveEvent {
+  phase: string;
+  progressPercent: number;
+  message: string;
+  timestamp: string;
+}
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B';
@@ -29,6 +37,36 @@ function formatRelative(dateStr: string): string {
   if (d > 0) return `${d}d ago`;
   if (h > 0) return `${h}h ago`;
   return 'just now';
+}
+
+function formatElapsedMs(ms: number): string {
+  if (ms <= 0) return '—';
+  const s = Math.floor(ms / 1000);
+  const m = Math.floor(s / 60);
+  return m > 0 ? `${m}m ${s % 60}s` : `${s}s`;
+}
+
+function itemJobEtaLabel(job: JobResult, progressPct: number, nowMs: number): string | null {
+  if (job.state !== 'active' && job.state !== 'waiting') return null;
+  const start = job.processedAt ?? job.createdAt;
+  if (!start) return null;
+  if (progressPct < 3 || progressPct > 97) return null;
+  const elapsed = nowMs - start;
+  if (elapsed < 2000) return null;
+  const eta = elapsed * (100 / progressPct - 1);
+  if (!Number.isFinite(eta) || eta < 0 || eta > 72 * 3600 * 1000) return null;
+  return `≈ ${formatElapsedMs(eta)} restantes`;
+}
+
+function tryNotifyJobFinish(title: string, body: string) {
+  if (typeof document === 'undefined') return;
+  if (document.visibilityState === 'visible') return;
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+  try {
+    new Notification(title, { body });
+  } catch {
+    /* ignore */
+  }
 }
 
 export default function LibraryItemPage() {
@@ -48,6 +86,8 @@ export default function LibraryItemPage() {
   const [targetConflictResolution, setTargetConflictResolution] = useState<
     'default' | 'replace' | 'alternate'
   >('default');
+  const [liveJobEvent, setLiveJobEvent] = useState<LiveEvent | null>(null);
+  const [nowTick, setNowTick] = useState(() => Date.now());
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -100,6 +140,47 @@ export default function LibraryItemPage() {
     [item],
   );
 
+  const activeJobForItem = useMemo(
+    () =>
+      jobs.find(
+        j =>
+          j.data.mediaItemId === params.id &&
+          (j.state === 'active' || j.state === 'waiting'),
+      ) ?? null,
+    [jobs, params.id],
+  );
+
+  useEffect(() => {
+    if (!activeJobForItem) {
+      setLiveJobEvent(null);
+      return;
+    }
+    const src = new EventSource(`${API_URL}/jobs/${activeJobForItem.id}/stream`);
+    src.onmessage = (ev) => {
+      const payload = JSON.parse(ev.data) as LiveEvent;
+      setLiveJobEvent(payload);
+      const ph = payload.phase.toLowerCase();
+      if (ph === 'completed') {
+        tryNotifyJobFinish('Traducción lista', payload.message || 'Completado');
+        void load();
+      }
+      if (ph === 'failed') {
+        tryNotifyJobFinish('Traducción fallida', payload.message || 'Error');
+        void load();
+      }
+    };
+    src.onerror = () => {
+      src.close();
+    };
+    return () => src.close();
+  }, [activeJobForItem?.id, load]);
+
+  useEffect(() => {
+    if (!activeJobForItem) return;
+    const t = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [activeJobForItem?.id]);
+
   const queue = async () => {
     if (!item || sourceTrackIndex === null) return;
     setQueuing(true);
@@ -119,6 +200,9 @@ export default function LibraryItemPage() {
             : targetConflictResolution,
       });
       toastSuccess('Translation job queued');
+      if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+        void Notification.requestPermission();
+      }
       await load();
     } catch (err) {
       toastError(err instanceof Error ? err.message : 'Failed to queue job');
@@ -444,6 +528,49 @@ export default function LibraryItemPage() {
           </div>
         </div>
       </div>
+
+      {activeJobForItem && (
+        <div className="bg-surface-container rounded-lg p-5 space-y-3 border border-primary/20">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <h2 className="text-sm font-semibold text-on-surface flex items-center gap-2">
+              <span className="material-symbols-outlined text-[18px] text-primary animate-pulse">
+                progress_activity
+              </span>
+              Job en curso
+            </h2>
+            <Link
+              href="/jobs"
+              className="text-xs text-primary hover:text-primary/80 transition-colors"
+            >
+              Ver cola
+            </Link>
+          </div>
+          <p className="text-xs font-mono text-on-surface-variant break-all">{activeJobForItem.id}</p>
+          <div className="space-y-1">
+            <ProgressBar
+              value={liveJobEvent?.progressPercent ?? Number(activeJobForItem.progress ?? 0)}
+              showLabel
+            />
+            {(() => {
+              const p = liveJobEvent?.progressPercent ?? Number(activeJobForItem.progress ?? 0);
+              const eta = itemJobEtaLabel(activeJobForItem, p, nowTick);
+              return eta ? (
+                <p className="text-[11px] font-mono text-on-surface-variant">{eta}</p>
+              ) : null;
+            })()}
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Badge variant="primary">
+              {liveJobEvent?.phase ?? activeJobForItem.state}
+            </Badge>
+            {liveJobEvent?.message && (
+              <span className="text-xs text-on-surface-variant truncate max-w-full">
+                {liveJobEvent.message}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Job History */}
       <div className="bg-surface-container rounded-lg p-5 space-y-4">

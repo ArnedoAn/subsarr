@@ -8,7 +8,7 @@ import {
   Query,
   Sse,
 } from '@nestjs/common';
-import { map, Observable } from 'rxjs';
+import { merge, map, Observable, of } from 'rxjs';
 import { CreateJobDto } from './dto/create-job.dto';
 import { JobsService } from './jobs.service';
 import { JobsEventsService } from './jobs-events.service';
@@ -48,9 +48,9 @@ export class JobsController {
     return this.jobsService.queryLogs(query);
   }
 
-  @Get(':id')
-  async getById(@Param('id') id: string) {
-    return this.jobsService.getById(id);
+  @Post(':id/retry')
+  async retry(@Param('id') id: string) {
+    return this.jobsService.retryFromArchive(id);
   }
 
   @Post(':id/cancel')
@@ -65,10 +65,18 @@ export class JobsController {
 
   @Sse(':id/stream')
   stream(@Param('id') id: string): Observable<MessageEvent> {
-    return this.jobsEventsService.getStream(id).pipe(
+    const last = this.jobsEventsService.peekLast(id);
+    const live$ = this.jobsEventsService.getStream(id);
+    const source$ = last ? merge(of(last), live$) : live$;
+    return source$.pipe(
       map((event) => ({
         data: event,
       })),
     );
+  }
+
+  @Get(':id')
+  async getById(@Param('id') id: string) {
+    return this.jobsService.getById(id);
   }
 }

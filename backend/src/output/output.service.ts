@@ -21,9 +21,7 @@ export class OutputService {
     if (variant === 'alternate') {
       return path.join(parsed.dir, `${parsed.name}.${lang}.2.${ext}`);
     }
-    const suffix = forced
-      ? `${lang}.forced.${ext}`
-      : `${lang}.${ext}`;
+    const suffix = forced ? `${lang}.forced.${ext}` : `${lang}.${ext}`;
     return path.join(parsed.dir, `${parsed.name}.${suffix}`);
   }
 

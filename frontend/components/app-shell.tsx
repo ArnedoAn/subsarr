@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { ThemeToggle } from '@/components/theme-toggle';
 import { useEffect, useState } from 'react';
 
 const navLinks = [
@@ -61,6 +62,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
         {/* Spacer */}
         <div className="flex-1" />
+
+        <ThemeToggle />
 
         {/* Header actions */}
         <nav className="hidden md:flex items-center gap-1">

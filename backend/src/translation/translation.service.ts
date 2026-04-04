@@ -50,7 +50,10 @@ export class TranslationService {
     private readonly verificationService: TranslationVerificationService,
   ) {}
 
-  private async runWithConcurrency<T>(tasks: (() => Promise<T>)[], concurrency: number): Promise<T[]> {
+  private async runWithConcurrency<T>(
+    tasks: (() => Promise<T>)[],
+    concurrency: number,
+  ): Promise<T[]> {
     const results: T[] = new Array(tasks.length);
     let i = 0;
 
@@ -62,7 +65,9 @@ export class TranslationService {
     };
 
     await Promise.all(
-      Array(Math.min(concurrency, tasks.length)).fill(0).map(() => worker())
+      Array(Math.min(concurrency, tasks.length))
+        .fill(0)
+        .map(() => worker()),
     );
 
     return results;
@@ -96,10 +101,11 @@ export class TranslationService {
         details?: any;
       }) => void;
       onLogFailedLine?: (line: FailedLine) => void;
-    }
+    },
   ): Promise<TranslationResult> {
     const output = [...lines];
-    let tierUsed: TranslationTier = options?.provider === 'deepseek' ? 'paid' : 'free';
+    let tierUsed: TranslationTier =
+      options?.provider === 'deepseek' ? 'paid' : 'free';
     let promptTokens = 0;
     let completionTokens = 0;
     const warnings: string[] = [];
@@ -123,7 +129,9 @@ export class TranslationService {
           options.onProgress({
             batchIndex: currentBatchIndex,
             totalBatches,
-            progressPercent: Math.floor((currentBatchIndex / totalBatches) * 100),
+            progressPercent: Math.floor(
+              (currentBatchIndex / totalBatches) * 100,
+            ),
             message: `Translating batch ${currentBatchIndex} of ${totalBatches} (${slice.length} lines)`,
             details: { start, end, lines: slice.length },
           });
@@ -135,7 +143,7 @@ export class TranslationService {
           targetLanguage,
           openRouterApiKey,
           deepSeekApiKey,
-          options?.provider
+          options?.provider,
         );
 
         return { start, result };
@@ -197,7 +205,8 @@ export class TranslationService {
     if (options.onVerificationSummary) {
       const countsByReason: Record<string, number> = {};
       for (const failed of verification.failedLines) {
-        countsByReason[failed.reason] = (countsByReason[failed.reason] ?? 0) + 1;
+        countsByReason[failed.reason] =
+          (countsByReason[failed.reason] ?? 0) + 1;
       }
       options.onVerificationSummary({
         successRate: verification.successRate,
@@ -432,8 +441,12 @@ export class TranslationService {
         throw new Error(`OpenRouter HTTP ${httpResponse.status}: ${errDetail}`);
       }
 
-      const choices = body.choices as Array<Record<string, unknown>> | undefined;
-      const message = choices?.[0]?.message as Record<string, unknown> | undefined;
+      const choices = body.choices as
+        | Array<Record<string, unknown>>
+        | undefined;
+      const message = choices?.[0]?.message as
+        | Record<string, unknown>
+        | undefined;
       let content = '';
       const rawContent = message?.content;
       if (typeof rawContent === 'string') {
@@ -519,7 +532,10 @@ export class TranslationService {
 
     let arrayData = parsed;
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      arrayData = (parsed as any).data || (parsed as any).translations || Object.values(parsed)[0];
+      arrayData =
+        (parsed as any).data ||
+        (parsed as any).translations ||
+        Object.values(parsed)[0];
     }
 
     if (!Array.isArray(arrayData)) {
@@ -566,8 +582,8 @@ export class TranslationService {
       'statusCode' in error
         ? Number((error as { statusCode?: unknown }).statusCode)
         : 'status' in error
-        ? Number((error as { status?: unknown }).status)
-        : undefined;
+          ? Number((error as { status?: unknown }).status)
+          : undefined;
     if (statusCode === 429) {
       const retryAfter =
         'headers' in error

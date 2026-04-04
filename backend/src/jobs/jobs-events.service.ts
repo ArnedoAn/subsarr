@@ -5,6 +5,7 @@ import { type JobProgressEvent } from './jobs.types';
 @Injectable()
 export class JobsEventsService {
   private readonly streams = new Map<string, Subject<JobProgressEvent>>();
+  private readonly lastEvent = new Map<string, JobProgressEvent>();
 
   getStream(jobId: string): Subject<JobProgressEvent> {
     const existing = this.streams.get(jobId);
@@ -17,7 +18,12 @@ export class JobsEventsService {
     return subject;
   }
 
+  peekLast(jobId: string): JobProgressEvent | undefined {
+    return this.lastEvent.get(jobId);
+  }
+
   publish(jobId: string, event: JobProgressEvent): void {
+    this.lastEvent.set(jobId, event);
     this.getStream(jobId).next(event);
   }
 

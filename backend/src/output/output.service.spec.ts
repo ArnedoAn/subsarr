@@ -35,9 +35,7 @@ describe('OutputService', () => {
       false,
       'ass',
     );
-    expect(normalizeSeparators(result)).toBe(
-      '/media/Show.S01E01.spa.ass',
-    );
+    expect(normalizeSeparators(result)).toBe('/media/Show.S01E01.spa.ass');
   });
 
   it('builds forced ASS path', () => {
@@ -62,8 +60,6 @@ describe('OutputService', () => {
       'ass',
       'alternate',
     );
-    expect(normalizeSeparators(result)).toBe(
-      '/media/Show.S01E01.spa.2.ass',
-    );
+    expect(normalizeSeparators(result)).toBe('/media/Show.S01E01.spa.2.ass');
   });
 });

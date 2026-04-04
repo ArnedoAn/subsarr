@@ -7,6 +7,7 @@ import { type JobLogEntry } from './job-logs.service';
 import { type JobReturnValue, type TranslationJobPayload } from './jobs.types';
 
 const ARCHIVE_FILENAME = 'jobs-archive.jsonl';
+const MAX_ARCHIVED_JOBS = 500;
 
 export type ArchivedJobState = 'completed' | 'failed' | 'cancelled';
 
@@ -46,11 +47,29 @@ export class JobArchiveService {
       `${JSON.stringify(snapshot)}\n`,
       'utf8',
     );
+    await this.compactArchiveIfNeeded();
   }
 
-  /**
-   * Reads all snapshots; if the same job id appears more than once, keeps the newest by finishedAt.
-   */
+  private async compactArchiveIfNeeded(): Promise<void> {
+    try {
+      const all = await this.readSnapshots();
+      if (all.length <= MAX_ARCHIVED_JOBS) {
+        return;
+      }
+      const sorted = [...all].sort((a, b) => b.finishedAt - a.finishedAt);
+      const keep = sorted.slice(0, MAX_ARCHIVED_JOBS);
+      const lines = `${keep.map((s) => JSON.stringify(s)).join('\n')}\n`;
+      await fs.writeFile(this.archivePath, lines, 'utf8');
+      this.logger.log(
+        `Job archive compacted to ${keep.length} snapshots (was ${all.length})`,
+      );
+    } catch (e) {
+      this.logger.warn(
+        `Archive compaction skipped: ${e instanceof Error ? e.message : e}`,
+      );
+    }
+  }
+
   async readSnapshots(): Promise<ArchivedJobSnapshot[]> {
     let raw: string;
     try {

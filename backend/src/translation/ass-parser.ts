@@ -30,7 +30,9 @@ function findNthComma(s: string, n: number): number {
   return -1;
 }
 
-export function splitAssDialogueBody(body: string): { prefix: string; text: string } | null {
+export function splitAssDialogueBody(
+  body: string,
+): { prefix: string; text: string } | null {
   const idx = findNthComma(body, 9);
   if (idx === -1) {
     return null;

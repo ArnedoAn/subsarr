@@ -12,6 +12,7 @@ import { OutputModule } from '../output/output.module';
 import { JobsEventsService } from './jobs-events.service';
 import { JobLogsService } from './job-logs.service';
 import { JobArchiveService } from './job-archive.service';
+import { SubsyncTempCleanupService } from './subsync-temp-cleanup.service';
 
 @Module({
   imports: [
@@ -31,6 +32,7 @@ import { JobArchiveService } from './job-archive.service';
     JobsEventsService,
     JobLogsService,
     JobArchiveService,
+    SubsyncTempCleanupService,
   ],
   controllers: [JobsController],
   exports: [JobsService],

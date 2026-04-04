@@ -51,8 +51,7 @@ Comment: 0,0:00:00.00,0:00:00.00,Default,,0,0,0,,Skip me
   });
 
   it('splitAssDialogueBody handles nine commas before text', () => {
-    const body =
-      '0,0:00:01.23,0:00:03.45,Default,,0,0,0,,Hello, with, commas';
+    const body = '0,0:00:01.23,0:00:03.45,Default,,0,0,0,,Hello, with, commas';
     const r = splitAssDialogueBody(body);
     expect(r).not.toBeNull();
     expect(r!.text).toBe('Hello, with, commas');

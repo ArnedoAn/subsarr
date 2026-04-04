@@ -1,5 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
+import { JobArchiveService } from './job-archive.service';
 
 export type JobLogLevel = 'info' | 'warn' | 'error';
 
@@ -25,10 +26,53 @@ const MAX_GLOBAL_LOGS = 5000;
 const MAX_JOB_LOGS = 500;
 
 @Injectable()
-export class JobLogsService {
+export class JobLogsService implements OnModuleInit {
   private readonly logger = new Logger('JobLogs');
   private readonly logsByJob = new Map<string, JobLogEntry[]>();
   private readonly globalLogs: JobLogEntry[] = [];
+
+  constructor(private readonly jobArchiveService: JobArchiveService) {}
+
+  async onModuleInit(): Promise<void> {
+    try {
+      const snaps = await this.jobArchiveService.readSnapshots();
+      const seenIds = new Set<string>();
+      const sorted = [...snaps].sort((a, b) => a.finishedAt - b.finishedAt);
+      for (const snap of sorted) {
+        for (const log of snap.logs ?? []) {
+          if (!log?.id || seenIds.has(log.id)) {
+            continue;
+          }
+          seenIds.add(log.id);
+          this.ingestFromArchive(log);
+        }
+      }
+      if (seenIds.size > 0) {
+        this.logger.log(
+          `Rehydrated ${seenIds.size} log entries from job archive`,
+        );
+      }
+    } catch (e) {
+      this.logger.warn(
+        `Log rehydration skipped: ${e instanceof Error ? e.message : e}`,
+      );
+    }
+  }
+
+  private ingestFromArchive(log: JobLogEntry): void {
+    this.globalLogs.push(log);
+    if (this.globalLogs.length > MAX_GLOBAL_LOGS) {
+      this.globalLogs.shift();
+    }
+    if (log.jobId) {
+      const existing = this.logsByJob.get(log.jobId) ?? [];
+      existing.push(log);
+      if (existing.length > MAX_JOB_LOGS) {
+        existing.shift();
+      }
+      this.logsByJob.set(log.jobId, existing);
+    }
+  }
 
   append(input: Omit<JobLogEntry, 'id' | 'timestamp'>): JobLogEntry {
     const log: JobLogEntry = {

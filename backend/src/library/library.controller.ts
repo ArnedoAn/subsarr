@@ -56,7 +56,9 @@ export class LibraryController {
     }
   }
 
-  private async attachRuleStatus(items: readonly import('./media-item.entity').MediaItem[]) {
+  private async attachRuleStatus(
+    items: readonly import('./media-item.entity').MediaItem[],
+  ) {
     const definitions = await this.rulesService.getDefinitions();
     const config = await this.rulesService.getTranslationConfig();
 
