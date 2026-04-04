@@ -1,7 +1,11 @@
-import { Controller, Get, Param, Post, Query, Logger } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, Logger } from '@nestjs/common';
+import { promises as fs } from 'node:fs';
 import { LibraryService } from './library.service';
 import { RulesService } from '../rules/rules.service';
 import { LibraryQueryDto } from './dto/library-query.dto';
+import { OutputService } from '../output/output.service';
+import { ExtractionService } from '../extraction/extraction.service';
+import { PreviewSubtitleDto } from './dto/preview-subtitle.dto';
 
 @Controller('library')
 export class LibraryController {
@@ -10,6 +14,8 @@ export class LibraryController {
   constructor(
     private readonly libraryService: LibraryService,
     private readonly rulesService: RulesService,
+    private readonly outputService: OutputService,
+    private readonly extractionService: ExtractionService,
   ) {}
 
   @Get()
@@ -18,8 +24,40 @@ export class LibraryController {
       `GET /library called with includeRules=${query.includeRules}`,
     );
     try {
-      const items = await this.libraryService.getLibrary(false);
+      let items = await this.libraryService.getLibrary(false);
       this.logger.log(`Library returned ${items.length} items`);
+
+      const q = query.q?.trim().toLowerCase();
+      if (q) {
+        items = items.filter(
+          (it) =>
+            it.path.toLowerCase().includes(q) ||
+            it.name.toLowerCase().includes(q),
+        );
+      }
+
+      const ord = query.order === 'asc' ? 1 : -1;
+      if (query.sort === 'name') {
+        items = [...items].sort((a, b) => ord * a.name.localeCompare(b.name));
+      } else if (query.sort === 'size') {
+        items = [...items].sort((a, b) => ord * (a.size - b.size));
+      } else if (query.sort === 'date') {
+        items = [...items].sort(
+          (a, b) =>
+            ord *
+            (new Date(a.lastModified).getTime() -
+              new Date(b.lastModified).getTime()),
+        );
+      } else if (query.sort === 'tracks') {
+        items = [...items].sort(
+          (a, b) =>
+            ord *
+            (a.subtitleTracks.length +
+              a.externalSubtitles.length -
+              (b.subtitleTracks.length + b.externalSubtitles.length)),
+        );
+      }
+
       const includeRules = query.includeRules === 'true';
 
       if (!includeRules) {
@@ -31,6 +69,38 @@ export class LibraryController {
       this.logger.error(`Failed to get library: ${err}`);
       throw err;
     }
+  }
+
+  @Post(':id/preview-subtitle')
+  async previewSubtitle(
+    @Param('id') id: string,
+    @Body() body: PreviewSubtitleDto,
+  ) {
+    const item = await this.libraryService.getById(id);
+    const extraction = await this.extractionService.extractSubtitleTrack(
+      item.path,
+      body.sourceTrackIndex,
+      'srt',
+    );
+    try {
+      const raw = await fs.readFile(extraction.tempFilePath, 'utf8');
+      const lines = raw.split(/\r?\n/);
+      const previewLines = lines.slice(0, 50);
+      return {
+        totalLines: lines.length,
+        preview: previewLines.join('\n'),
+        encoding: 'utf-8',
+      };
+    } finally {
+      await fs.unlink(extraction.tempFilePath).catch(() => undefined);
+    }
+  }
+
+  @Get(':id/translation-history')
+  async translationHistory(@Param('id') id: string) {
+    await this.libraryService.getById(id);
+    const files = await this.outputService.listTranslationHistory(id);
+    return { versions: files };
   }
 
   @Get(':id')

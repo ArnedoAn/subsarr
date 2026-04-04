@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bull';
 import type { Queue } from 'bull';
+import { randomUUID } from 'node:crypto';
 import { type CreateJobDto } from './dto/create-job.dto';
 import { type JobReturnValue, type TranslationJobPayload } from './jobs.types';
 import { OutputService } from '../output/output.service';
@@ -26,6 +27,11 @@ import {
   subtitleOutputExtensionFromCodec,
   type SubtitleOutputExtension,
 } from '../translation/subtitle-format';
+import { SettingsService } from '../settings/settings.service';
+import { TokenUsageService } from '../settings/token-usage.service';
+import { ProfilesService } from '../profiles/profiles.service';
+import type { TranslationProfile } from '../profiles/profile.types';
+import type { LogsQueryDto } from './dto/logs-query.dto';
 
 @Injectable()
 export class JobsService {
@@ -37,20 +43,86 @@ export class JobsService {
     private readonly rulesService: RulesService,
     private readonly jobLogsService: JobLogsService,
     private readonly jobArchiveService: JobArchiveService,
+    private readonly settingsService: SettingsService,
+    private readonly tokenUsageService: TokenUsageService,
+    private readonly profilesService: ProfilesService,
   ) {}
 
-  async enqueue(dto: CreateJobDto) {
+  async enqueue(
+    dto: CreateJobDto,
+  ): Promise<
+    | { id: string | number; state: string }
+    | {
+        batchGroupId: string;
+        jobs: Array<{ id: string | number; state: string }>;
+      }
+  > {
+    await this.assertTokenQuotas();
+
+    if (
+      !dto.targetLanguages?.length &&
+      (!dto.targetLanguage || !dto.targetLanguage.trim())
+    ) {
+      throw new BadRequestException(
+        'targetLanguage or targetLanguages is required',
+      );
+    }
+
+    const targets =
+      dto.targetLanguages && dto.targetLanguages.length > 0
+        ? dto.targetLanguages.map((l) => this.normalizeLanguage(l))
+        : [this.normalizeLanguage(dto.targetLanguage!)];
+
+    if (targets.length === 1) {
+      return this.enqueueSingleTarget(dto, {
+        targetLanguage: targets[0],
+      });
+    }
+
+    const batchGroupId = randomUUID();
+    const jobs: Array<{ id: string | number; state: string }> = [];
+    for (const targetLanguage of targets) {
+      jobs.push(
+        await this.enqueueSingleTarget(dto, {
+          targetLanguage,
+          batchGroupId,
+        }),
+      );
+    }
+    return { batchGroupId, jobs };
+  }
+
+  private async enqueueSingleTarget(
+    dto: CreateJobDto,
+    ctx: { targetLanguage: string; batchGroupId?: string },
+  ): Promise<{ id: string | number; state: string }> {
     let item: MediaItem | null = null;
     let sourceLanguage = '';
-    let targetLanguage = '';
+    let targetLanguage = ctx.targetLanguage;
+    let provider: 'openrouter' | 'deepseek' | undefined = dto.provider;
     let outputExtension: SubtitleOutputExtension = 'srt';
 
     try {
-      targetLanguage = this.normalizeLanguage(dto.targetLanguage);
       sourceLanguage = this.normalizeLanguage(dto.sourceLanguage);
 
       item = await this.libraryService.getById(dto.mediaItemId);
       this.validateMediaPath(dto, item);
+
+      if (dto.respectProfiles !== false) {
+        const settings = await this.settingsService.getSettings();
+        const profiles = await this.profilesService.list();
+        const eff = this.resolveProfileForPath(item.path, profiles, {
+          sourceLanguage: settings.sourceLanguage,
+          targetLanguage: settings.targetLanguage,
+          provider: dto.provider,
+        });
+        sourceLanguage = this.normalizeLanguage(eff.sourceLanguage);
+        provider = eff.provider ?? dto.provider;
+        if (!dto.targetLanguages?.length) {
+          targetLanguage = this.normalizeLanguage(eff.targetLanguage);
+        }
+      }
+
       const sourceTrack = this.validateSourceTrack(item, dto.sourceTrackIndex);
       outputExtension = subtitleOutputExtensionFromCodec(sourceTrack.codec);
       if (sourceTrack.language !== sourceLanguage) {
@@ -66,7 +138,7 @@ export class JobsService {
       ) {
         throw error;
       }
-      this.jobLogsService.append({
+      await this.jobLogsService.append({
         level: 'warn',
         phase: 'precheck',
         message:
@@ -99,7 +171,7 @@ export class JobsService {
       });
 
       if (ruleResult.skip) {
-        this.jobLogsService.append({
+        await this.jobLogsService.append({
           level: 'warn',
           phase: 'precheck',
           message: `Job blocked by rules: ${ruleResult.reason ?? 'Blocked by rule'}`,
@@ -148,7 +220,7 @@ export class JobsService {
     });
 
     if (duplicate) {
-      this.jobLogsService.append({
+      await this.jobLogsService.append({
         level: 'warn',
         phase: 'precheck',
         message: `Duplicate output path conflict: ${outputPath}`,
@@ -172,17 +244,19 @@ export class JobsService {
         targetConflictResolution: dto.targetConflictResolution,
         triggeredBy: dto.triggeredBy,
         forceBypassRules: dto.forceBypassRules ?? false,
-        provider: dto.provider,
+        provider,
+        batchGroupId: ctx.batchGroupId,
       },
       {
         removeOnComplete: 200,
         removeOnFail: 200,
         attempts: 3,
         backoff: { type: 'exponential', delay: 10000 },
+        priority: this.defaultPriority(dto),
       },
     );
 
-    this.jobLogsService.append({
+    await this.jobLogsService.append({
       jobId: String(job.id),
       level: 'info',
       phase: 'waiting',
@@ -201,6 +275,8 @@ export class JobsService {
   }
 
   async enqueueBatch(dto: CreateBatchJobsDto) {
+    await this.assertTokenQuotas();
+
     const results: Array<{
       mediaItemId: string;
       id?: string | number;
@@ -219,7 +295,12 @@ export class JobsService {
           forceBypassRules: dto.forceBypassRules,
           provider: dto.provider,
           targetConflictResolution: dto.targetConflictResolution,
+          priority: dto.priority ?? 8,
         });
+
+        if ('batchGroupId' in job) {
+          throw new Error('Unexpected multi-target batch item');
+        }
 
         results.push({
           mediaItemId: item.mediaItemId,
@@ -362,7 +443,7 @@ export class JobsService {
         createdAt: job.timestamp,
         processedAt: job.processedOn,
         finishedAt: job.finishedOn,
-        logs: this.jobLogsService.getByJob(id),
+        logs: await this.jobLogsService.getByJob(id),
         archived: false,
       };
     }
@@ -415,7 +496,7 @@ export class JobsService {
 
     await job.remove();
 
-    this.jobLogsService.append({
+    await this.jobLogsService.append({
       jobId: id,
       level: 'info',
       phase: 'cancelled',
@@ -430,7 +511,7 @@ export class JobsService {
       processedAt: processedAt ?? undefined,
       finishedAt: Date.now(),
       progress: 100,
-      logs: this.jobLogsService.getByJob(id),
+      logs: await this.jobLogsService.getByJob(id),
     });
 
     return {
@@ -455,21 +536,58 @@ export class JobsService {
     };
   }
 
-  getLogsByJob(jobId: string) {
+  async getLogsByJob(jobId: string) {
     return this.jobLogsService.getByJob(jobId);
   }
 
-  queryLogs(query: {
-    level?: 'info' | 'warn' | 'error';
-    jobId?: string;
-    search?: string;
-    from?: string;
-    to?: string;
-  }) {
-    return this.jobLogsService.query(query);
+  async queryLogs(query: LogsQueryDto) {
+    const q = {
+      level: query.level,
+      jobId: query.jobId,
+      search: query.search,
+      from: query.from,
+      to: query.to,
+      cursor: query.cursor,
+      limit: query.limit ?? 100,
+    };
+    const items = await this.jobLogsService.query(q);
+    const total = await this.jobLogsService.queryCount({
+      level: q.level,
+      jobId: q.jobId,
+      search: q.search,
+      from: q.from,
+      to: q.to,
+    });
+    const nextCursor =
+      items.length > 0 ? items[items.length - 1].timestamp : null;
+    return { items, total, nextCursor };
+  }
+
+  async setJobPriority(id: string, priority: number) {
+    const job = await this.translationQueue.getJob(id);
+    if (!job) {
+      throw new NotFoundException(`Job not found: ${id}`);
+    }
+    const state = await job.getState();
+    if (state !== 'waiting' && state !== 'delayed') {
+      throw new BadRequestException(
+        `Only waiting or delayed jobs can change priority (state: ${state})`,
+      );
+    }
+    const json = job.toJSON() as unknown as {
+      data: TranslationJobPayload;
+      opts: Record<string, unknown>;
+    };
+    await job.remove();
+    const newJob = await this.translationQueue.add(json.data, {
+      ...json.opts,
+      priority,
+    } as any);
+    return { id: newJob.id, state: await newJob.getState() };
   }
 
   async retryFromArchive(id: string) {
+    await this.assertTokenQuotas();
     const snap = await this.jobArchiveService.getSnapshot(id);
     if (!snap) {
       throw new NotFoundException(`Job not found: ${id}`);
@@ -516,6 +634,74 @@ export class JobsService {
     }
 
     return normalized;
+  }
+
+  private defaultPriority(dto: CreateJobDto): number {
+    if (dto.priority != null) {
+      return dto.priority;
+    }
+    if (dto.triggeredBy === 'batch') {
+      return 8;
+    }
+    if (dto.triggeredBy === 'auto-scan') {
+      return 10;
+    }
+    return 5;
+  }
+
+  private resolveProfileForPath(
+    mediaPath: string,
+    profiles: TranslationProfile[],
+    defaults: {
+      sourceLanguage: string;
+      targetLanguage: string;
+      provider?: 'openrouter' | 'deepseek';
+    },
+  ): {
+    sourceLanguage: string;
+    targetLanguage: string;
+    provider?: 'openrouter' | 'deepseek';
+  } {
+    let best: TranslationProfile | null = null;
+    for (const p of profiles) {
+      if (mediaPath.startsWith(p.pathPrefix)) {
+        if (!best || p.pathPrefix.length > best.pathPrefix.length) {
+          best = p;
+        }
+      }
+    }
+    if (!best) {
+      return defaults;
+    }
+    return {
+      sourceLanguage: best.sourceLanguage,
+      targetLanguage: best.targetLanguage,
+      provider: best.provider ?? defaults.provider,
+    };
+  }
+
+  private async assertTokenQuotas(): Promise<void> {
+    const settings = await this.settingsService.getSettings();
+    const { free, paid } = await this.tokenUsageService.getTodayTotals();
+    if (
+      settings.dailyTokenLimitFree != null &&
+      free >= settings.dailyTokenLimitFree
+    ) {
+      throw new BadRequestException('Daily free-tier token limit reached');
+    }
+    if (
+      settings.dailyTokenLimitPaid != null &&
+      paid >= settings.dailyTokenLimitPaid
+    ) {
+      throw new BadRequestException('Daily paid-tier token limit reached');
+    }
+    if (settings.monthlyBudgetUsd != null) {
+      const spent =
+        await this.tokenUsageService.getMonthPaidCostEstimateUsd();
+      if (spent >= settings.monthlyBudgetUsd) {
+        throw new BadRequestException('Monthly DeepSeek budget limit reached');
+      }
+    }
   }
 
   private validateMediaPath(dto: CreateJobDto, item: MediaItem): void {

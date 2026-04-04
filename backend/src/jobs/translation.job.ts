@@ -1,4 +1,4 @@
-import { Logger } from '@nestjs/common';
+import { Logger, forwardRef, Inject } from '@nestjs/common';
 import { Processor, Process } from '@nestjs/bull';
 import { type Job } from 'bull';
 import { promises as fs } from 'node:fs';
@@ -22,6 +22,9 @@ import { type SubtitleOutputExtension } from '../translation/subtitle-format';
 import { looksLikeAssSubtitle } from '../translation/subtitle-sniff';
 import { type SubtitlePathVariant } from '../output/output.service';
 import { JobArchiveService } from './job-archive.service';
+import { TelegramService } from '../notifications/telegram.service';
+import { GlossaryService } from '../glossary/glossary.service';
+import { JellyfinService } from '../integrations/jellyfin.service';
 
 @Processor('translation')
 export class TranslationJobProcessor {
@@ -38,6 +41,10 @@ export class TranslationJobProcessor {
     private readonly tokenUsageService: TokenUsageService,
     private readonly jobLogsService: JobLogsService,
     private readonly jobArchiveService: JobArchiveService,
+    @Inject(forwardRef(() => TelegramService))
+    private readonly telegramService: TelegramService,
+    private readonly glossaryService: GlossaryService,
+    private readonly jellyfinService: JellyfinService,
   ) {}
 
   @Process({ concurrency: Number(process.env.SUBSYNC_CONCURRENCY ?? 2) })
@@ -50,7 +57,7 @@ export class TranslationJobProcessor {
         ? 'alternate'
         : 'default';
 
-    const publish = (
+    const publish = async (
       phase:
         | 'active'
         | 'extracting'
@@ -73,7 +80,7 @@ export class TranslationJobProcessor {
       });
       void job.progress(progressPercent);
 
-      this.jobLogsService.append({
+      await this.jobLogsService.append({
         jobId,
         level: phase === 'failed' ? 'error' : 'info',
         phase,
@@ -83,7 +90,7 @@ export class TranslationJobProcessor {
     };
 
     try {
-      publish('active', 0, 'Job started');
+      await publish('active', 0, 'Job started');
 
       const item = await this.libraryService.getById(job.data.mediaItemId);
       if (!job.data.forceBypassRules) {
@@ -96,7 +103,7 @@ export class TranslationJobProcessor {
         }
       }
 
-      publish('extracting', 10, 'Extracting subtitle track');
+      await publish('extracting', 10, 'Extracting subtitle track');
       let extraction = await this.extractionService.extractSubtitleTrack(
         item.path,
         job.data.sourceTrackIndex,
@@ -127,7 +134,7 @@ export class TranslationJobProcessor {
             extraction = assTry;
             decoded = assDecoded;
             effectiveExtension = 'ass';
-            this.jobLogsService.append({
+            await this.jobLogsService.append({
               jobId,
               level: 'info',
               phase: 'extracting',
@@ -151,10 +158,15 @@ export class TranslationJobProcessor {
           effectiveExtension,
           pathVariant,
         );
+        await this.outputService.snapshotExistingIfAny(
+          existingPath,
+          item.id,
+        );
         await fs.unlink(existingPath).catch(() => undefined);
       }
 
       const settings = await this.settingsService.getSettings();
+      const glossaryHint = await this.glossaryService.formatForPrompt();
       let loggedFailedLines = 0;
       const MAX_FAILED_LINES_TO_LOG = 10;
 
@@ -169,7 +181,7 @@ export class TranslationJobProcessor {
           throw new Error('No Dialogue lines in extracted ASS');
         }
 
-        publish(
+        await publish(
           'translating',
           25,
           `Translating ${dialogueTexts.length} subtitle lines`,
@@ -183,34 +195,34 @@ export class TranslationJobProcessor {
             provider: job.data.provider,
             sourceLanguage: job.data.sourceLanguage,
             verificationEnabled: settings.translationVerificationEnabled,
-            onVerificationPhase: (info) => {
+            onVerificationPhase: async (info) => {
               const progressPercent = info.phase === 'validating' ? 91 : 93;
-              publish(info.phase, progressPercent, info.message, info.details);
+              await publish(info.phase, progressPercent, info.message, info.details);
             },
-            onVerificationSummary: (info) => {
-              publish(
+            onVerificationSummary: async (info) => {
+              await publish(
                 'validating',
                 92,
                 `Validation: ${info.successRate}% success rate (${info.failedCount}/${info.totalLines} failed)`,
                 { countsByReason: info.countsByReason },
               );
             },
-            onProgress: (info) => {
+            onProgress: async (info) => {
               const overallProgress =
                 25 + Math.floor((info.progressPercent / 100) * 65);
-              publish(
+              await publish(
                 'translating',
                 overallProgress,
                 info.message,
                 info.details,
               );
             },
-            onLogFailedLine: (failed) => {
+            onLogFailedLine: async (failed) => {
               if (loggedFailedLines >= MAX_FAILED_LINES_TO_LOG) {
                 return;
               }
               loggedFailedLines += 1;
-              this.jobLogsService.append({
+              await this.jobLogsService.append({
                 jobId,
                 level: 'warn',
                 phase: 'verification',
@@ -224,11 +236,12 @@ export class TranslationJobProcessor {
                 },
               });
             },
+            glossaryHint,
           },
         );
 
         if (translated.verification) {
-          this.jobLogsService.append({
+          await this.jobLogsService.append({
             jobId,
             level: translated.verification.failedCount > 0 ? 'warn' : 'info',
             phase: 'verification',
@@ -244,7 +257,7 @@ export class TranslationJobProcessor {
         }
 
         for (const warning of translated.warnings) {
-          this.jobLogsService.append({
+          await this.jobLogsService.append({
             jobId,
             level: 'warn',
             phase: 'translating',
@@ -267,7 +280,7 @@ export class TranslationJobProcessor {
           throw new Error('ASS translation line count mismatch');
         }
 
-        publish('writing', 92, 'Writing output subtitle file');
+        await publish('writing', 92, 'Writing output subtitle file');
         const outputPath = await this.outputService.writeSubtitle(
           item.path,
           job.data.targetLanguage,
@@ -277,9 +290,9 @@ export class TranslationJobProcessor {
           pathVariant,
         );
 
-        this.tokenUsageService.addUsage(translated.tierUsed, translated.usage);
+        await this.tokenUsageService.addUsage(translated.tierUsed, translated.usage);
 
-        this.jobLogsService.append({
+        await this.jobLogsService.append({
           jobId,
           level: 'info',
           phase: 'completed',
@@ -292,7 +305,7 @@ export class TranslationJobProcessor {
         });
 
         await fs.unlink(extraction.tempFilePath).catch(() => undefined);
-        publish('completed', 100, 'Translation completed');
+        await publish('completed', 100, 'Translation completed');
         this.jobsEventsService.complete(jobId);
 
         const assReturn: JobReturnValue = {
@@ -302,6 +315,13 @@ export class TranslationJobProcessor {
           lineCount: dialogueTexts.length,
         };
         await this.persistJobArchive(job, 'completed', assReturn);
+        void this.telegramService.notifyJobCompleted(
+          jobId,
+          job.data,
+          assReturn,
+          job.timestamp,
+        );
+        void this.jellyfinService.refreshLibraryAfterSubtitle();
         return assReturn;
       }
 
@@ -312,7 +332,7 @@ export class TranslationJobProcessor {
         throw new Error('Extracted subtitle track is empty');
       }
 
-      publish('translating', 25, `Translating ${cues.length} subtitle lines`);
+      await publish('translating', 25, `Translating ${cues.length} subtitle lines`);
       const translated = await this.translationService.translateLines(
         cues.map((cue) => cue.text),
         job.data.targetLanguage,
@@ -322,29 +342,29 @@ export class TranslationJobProcessor {
           provider: job.data.provider,
           sourceLanguage: job.data.sourceLanguage,
           verificationEnabled: settings.translationVerificationEnabled,
-          onVerificationPhase: (info) => {
+          onVerificationPhase: async (info) => {
             const progressPercent = info.phase === 'validating' ? 91 : 93;
-            publish(info.phase, progressPercent, info.message, info.details);
+            await publish(info.phase, progressPercent, info.message, info.details);
           },
-          onVerificationSummary: (info) => {
-            publish(
+          onVerificationSummary: async (info) => {
+            await publish(
               'validating',
               92,
               `Validation: ${info.successRate}% success rate (${info.failedCount}/${info.totalLines} failed)`,
               { countsByReason: info.countsByReason },
             );
           },
-          onProgress: (info) => {
+          onProgress: async (info) => {
             const overallProgress =
               25 + Math.floor((info.progressPercent / 100) * 65);
-            publish('translating', overallProgress, info.message, info.details);
+            await publish('translating', overallProgress, info.message, info.details);
           },
-          onLogFailedLine: (failed) => {
+          onLogFailedLine: async (failed) => {
             if (loggedFailedLines >= MAX_FAILED_LINES_TO_LOG) {
               return;
             }
             loggedFailedLines += 1;
-            this.jobLogsService.append({
+            await this.jobLogsService.append({
               jobId,
               level: 'warn',
               phase: 'verification',
@@ -358,11 +378,12 @@ export class TranslationJobProcessor {
               },
             });
           },
+          glossaryHint,
         },
       );
 
       if (translated.verification) {
-        this.jobLogsService.append({
+        await this.jobLogsService.append({
           jobId,
           level: translated.verification.failedCount > 0 ? 'warn' : 'info',
           phase: 'verification',
@@ -378,7 +399,7 @@ export class TranslationJobProcessor {
       }
 
       for (const warning of translated.warnings) {
-        this.jobLogsService.append({
+        await this.jobLogsService.append({
           jobId,
           level: 'warn',
           phase: 'translating',
@@ -392,7 +413,7 @@ export class TranslationJobProcessor {
         void job.progress(progress);
       }
 
-      publish('writing', 92, 'Writing output subtitle file');
+      await publish('writing', 92, 'Writing output subtitle file');
       const outputPath = await this.outputService.writeSubtitle(
         item.path,
         job.data.targetLanguage,
@@ -402,9 +423,9 @@ export class TranslationJobProcessor {
         pathVariant,
       );
 
-      this.tokenUsageService.addUsage(translated.tierUsed, translated.usage);
+      await this.tokenUsageService.addUsage(translated.tierUsed, translated.usage);
 
-      this.jobLogsService.append({
+      await this.jobLogsService.append({
         jobId,
         level: 'info',
         phase: 'completed',
@@ -417,7 +438,7 @@ export class TranslationJobProcessor {
       });
 
       await fs.unlink(extraction.tempFilePath).catch(() => undefined);
-      publish('completed', 100, 'Translation completed');
+      await publish('completed', 100, 'Translation completed');
       this.jobsEventsService.complete(jobId);
 
       const srtReturn: JobReturnValue = {
@@ -427,6 +448,13 @@ export class TranslationJobProcessor {
         lineCount: cues.length,
       };
       await this.persistJobArchive(job, 'completed', srtReturn);
+      void this.telegramService.notifyJobCompleted(
+        jobId,
+        job.data,
+        srtReturn,
+        job.timestamp,
+      );
+      void this.jellyfinService.refreshLibraryAfterSubtitle();
       return srtReturn;
     } catch (error) {
       const message =
@@ -438,7 +466,9 @@ export class TranslationJobProcessor {
 
       await this.persistJobArchive(job, 'failed', undefined, message);
 
-      publish('failed', 100, message);
+      void this.telegramService.notifyJobFailed(jobId, job.data, message);
+
+      await publish('failed', 100, message);
       this.jobsEventsService.complete(jobId);
       throw error;
     }
@@ -461,7 +491,7 @@ export class TranslationJobProcessor {
         progress: 100,
         returnValue,
         failedReason,
-        logs: this.jobLogsService.getByJob(String(job.id)),
+        logs: await this.jobLogsService.getByJob(String(job.id)),
       });
     } catch (err) {
       this.logger.error(

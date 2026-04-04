@@ -4,12 +4,14 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { useEffect, useState } from 'react';
+import { appStrings } from '@/lib/app-strings';
 
 const navLinks = [
-  { href: '/',        label: 'Library',  icon: 'video_library' },
-  { href: '/jobs',    label: 'Jobs',     icon: 'work_history'  },
-  { href: '/archive', label: 'Logs',     icon: 'terminal'      },
-  { href: '/settings',label: 'Settings', icon: 'settings'      },
+  { href: '/',        label: appStrings.nav.library,  icon: 'video_library' },
+  { href: '/dashboard', label: appStrings.nav.dashboard, icon: 'dashboard' },
+  { href: '/jobs',    label: appStrings.nav.jobs,     icon: 'work_history'  },
+  { href: '/archive', label: appStrings.nav.logs,     icon: 'terminal'      },
+  { href: '/settings',label: appStrings.nav.settings, icon: 'settings'      },
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {

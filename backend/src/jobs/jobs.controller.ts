@@ -4,6 +4,7 @@ import {
   Get,
   MessageEvent,
   Param,
+  Patch,
   Post,
   Query,
   Sse,
@@ -15,6 +16,7 @@ import { JobsEventsService } from './jobs-events.service';
 import { CreateBatchJobsDto } from './dto/create-batch-jobs.dto';
 import { BatchPreviewDto } from './dto/batch-preview.dto';
 import { LogsQueryDto } from './dto/logs-query.dto';
+import { SetJobPriorityDto } from './dto/set-job-priority.dto';
 
 @Controller('jobs')
 export class JobsController {
@@ -44,7 +46,7 @@ export class JobsController {
   }
 
   @Get('logs/all')
-  logs(@Query() query: LogsQueryDto) {
+  async logs(@Query() query: LogsQueryDto) {
     return this.jobsService.queryLogs(query);
   }
 
@@ -58,8 +60,16 @@ export class JobsController {
     return this.jobsService.cancel(id);
   }
 
+  @Patch(':id/priority')
+  async setPriority(
+    @Param('id') id: string,
+    @Body() body: SetJobPriorityDto,
+  ) {
+    return this.jobsService.setJobPriority(id, body.priority);
+  }
+
   @Get(':id/logs')
-  logsByJob(@Param('id') id: string) {
+  async logsByJob(@Param('id') id: string) {
     return this.jobsService.getLogsByJob(id);
   }
 

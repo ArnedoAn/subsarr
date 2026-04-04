@@ -21,7 +21,9 @@ export interface TranslationJobPayload {
   outputExtension?: SubtitleOutputExtension;
   /** Overwrite existing target file, or write `name.lang.2.ext` instead of `name.lang.ext`. */
   targetConflictResolution?: 'replace' | 'alternate';
-  triggeredBy: 'manual' | 'batch';
+  /** When translating to multiple targets in one request. */
+  batchGroupId?: string;
+  triggeredBy: 'manual' | 'batch' | 'auto-scan';
   forceBypassRules?: boolean;
   provider?: 'openrouter' | 'deepseek';
 }

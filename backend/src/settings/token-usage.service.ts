@@ -1,60 +1,74 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { promises as fs } from 'node:fs';
-import * as path from 'node:path';
+import { Injectable, Logger } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import {
   type TranslationTier,
   type TranslationUsage,
 } from '../translation/translation.service';
-import { type SubsyncEnvConfig } from '../config/subsync.config';
+import { TokenUsageRowEntity } from '../database/entities/token-usage-row.entity';
 import { type TokenUsageSummary } from './dto/token-usage-summary.dto';
 
-const USAGE_FILENAME = 'token-usage.json';
-
-interface InternalSummary {
-  free: TranslationUsage;
-  paid: TranslationUsage;
-}
-
 @Injectable()
-export class TokenUsageService implements OnModuleInit {
+export class TokenUsageService {
   private readonly logger = new Logger(TokenUsageService.name);
-  private readonly usagePath: string;
-  private summary: InternalSummary = {
-    free: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
-    paid: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
-  };
 
-  constructor(private readonly configService: ConfigService) {
-    const config = this.configService.get<SubsyncEnvConfig>('subsync');
-    const dataDir = config?.dataDir ?? '/data';
-    this.usagePath = path.join(dataDir, USAGE_FILENAME);
+  constructor(
+    @InjectRepository(TokenUsageRowEntity)
+    private readonly usageRepo: Repository<TokenUsageRowEntity>,
+  ) {}
+
+  private todayUtc(): string {
+    return new Date().toISOString().slice(0, 10);
   }
 
-  async onModuleInit(): Promise<void> {
-    try {
-      const raw = await fs.readFile(this.usagePath, 'utf8');
-      const parsed = JSON.parse(raw) as Partial<InternalSummary>;
-      if (parsed.free) {
-        this.summary.free = { ...this.summary.free, ...parsed.free };
+  async getTodayTotals(): Promise<{ free: number; paid: number }> {
+    const date = this.todayUtc();
+    const rows = await this.usageRepo.find({ where: { date } });
+    let free = 0;
+    let paid = 0;
+    for (const r of rows) {
+      if (r.tier === 'free') {
+        free += r.totalTokens;
+      } else if (r.tier === 'paid') {
+        paid += r.totalTokens;
       }
-      if (parsed.paid) {
-        this.summary.paid = { ...this.summary.paid, ...parsed.paid };
-      }
-    } catch {
-      /* missing or invalid */
     }
+    return { free, paid };
   }
 
-  private async persist(): Promise<void> {
+  /** DeepSeek-style cost estimate for paid tier rows in current UTC month. */
+  async getMonthPaidCostEstimateUsd(): Promise<number> {
+    const prefix = new Date().toISOString().slice(0, 7);
+    const rows = await this.usageRepo
+      .createQueryBuilder('u')
+      .where('u.tier = :t', { t: 'paid' })
+      .andWhere('u.date LIKE :p', { p: `${prefix}%` })
+      .andWhere('u.date != :legacy', { legacy: 'legacy' })
+      .getMany();
+    const prompt = rows.reduce((a, r) => a + r.promptTokens, 0);
+    const completion = rows.reduce((a, r) => a + r.completionTokens, 0);
+    const paidInputCost = (prompt / 1_000_000) * 0.14;
+    const paidOutputCost = (completion / 1_000_000) * 0.28;
+    return Number((paidInputCost + paidOutputCost).toFixed(6));
+  }
+
+  async addUsage(tier: TranslationTier, usage: TranslationUsage): Promise<void> {
+    const date = this.todayUtc();
     try {
-      const dir = path.dirname(this.usagePath);
-      await fs.mkdir(dir, { recursive: true });
-      await fs.writeFile(
-        this.usagePath,
-        JSON.stringify(this.summary, null, 2),
-        'utf8',
-      );
+      let row = await this.usageRepo.findOne({ where: { tier, date } });
+      if (!row) {
+        row = this.usageRepo.create({
+          tier,
+          date,
+          promptTokens: 0,
+          completionTokens: 0,
+          totalTokens: 0,
+        });
+      }
+      row.promptTokens += usage.promptTokens;
+      row.completionTokens += usage.completionTokens;
+      row.totalTokens += usage.totalTokens;
+      await this.usageRepo.save(row);
     } catch (e) {
       this.logger.warn(
         `Could not persist token usage: ${e instanceof Error ? e.message : e}`,
@@ -62,25 +76,73 @@ export class TokenUsageService implements OnModuleInit {
     }
   }
 
-  addUsage(tier: TranslationTier, usage: TranslationUsage): void {
-    const target = this.summary[tier];
-    target.promptTokens += usage.promptTokens;
-    target.completionTokens += usage.completionTokens;
-    target.totalTokens += usage.totalTokens;
-    void this.persist();
-  }
+  async getSummary(): Promise<TokenUsageSummary> {
+    const freeRows = await this.usageRepo.find({ where: { tier: 'free' } });
+    const paidRows = await this.usageRepo.find({ where: { tier: 'paid' } });
 
-  getSummary(): TokenUsageSummary {
-    const paidInputCost = (this.summary.paid.promptTokens / 1_000_000) * 0.14;
-    const paidOutputCost =
-      (this.summary.paid.completionTokens / 1_000_000) * 0.28;
+    const free = freeRows.reduce(
+      (acc, r) => ({
+        promptTokens: acc.promptTokens + r.promptTokens,
+        completionTokens: acc.completionTokens + r.completionTokens,
+        totalTokens: acc.totalTokens + r.totalTokens,
+      }),
+      { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+    );
+
+    const paid = paidRows.reduce(
+      (acc, r) => ({
+        promptTokens: acc.promptTokens + r.promptTokens,
+        completionTokens: acc.completionTokens + r.completionTokens,
+        totalTokens: acc.totalTokens + r.totalTokens,
+      }),
+      { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+    );
+
+    const paidInputCost = (paid.promptTokens / 1_000_000) * 0.14;
+    const paidOutputCost = (paid.completionTokens / 1_000_000) * 0.28;
 
     return {
-      free: { ...this.summary.free },
-      paid: { ...this.summary.paid },
+      free,
+      paid,
       deepSeekEstimatedCostUsd: Number(
         (paidInputCost + paidOutputCost).toFixed(6),
       ),
     };
+  }
+
+  /** Last N calendar days (UTC), excluding `legacy` import row. */
+  async getDailyTokenSeries(
+    lastDays: number,
+  ): Promise<Array<{ date: string; free: number; paid: number }>> {
+    const end = new Date();
+    const start = new Date(end);
+    start.setUTCDate(start.getUTCDate() - (lastDays - 1));
+    const from = start.toISOString().slice(0, 10);
+    const rows = await this.usageRepo
+      .createQueryBuilder('u')
+      .where('u.date != :legacy', { legacy: 'legacy' })
+      .andWhere('u.date >= :from', { from })
+      .getMany();
+
+    const byDate = new Map<string, { free: number; paid: number }>();
+    for (const r of rows) {
+      if (!byDate.has(r.date)) {
+        byDate.set(r.date, { free: 0, paid: 0 });
+      }
+      const b = byDate.get(r.date)!;
+      if (r.tier === 'free') {
+        b.free += r.totalTokens;
+      } else if (r.tier === 'paid') {
+        b.paid += r.totalTokens;
+      }
+    }
+
+    const out: Array<{ date: string; free: number; paid: number }> = [];
+    for (let d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
+      const key = d.toISOString().slice(0, 10);
+      const v = byDate.get(key) ?? { free: 0, paid: 0 };
+      out.push({ date: key, ...v });
+    }
+    return out;
   }
 }

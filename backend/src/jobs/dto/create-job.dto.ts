@@ -1,10 +1,12 @@
 import {
+  IsArray,
   IsBoolean,
   IsIn,
   IsInt,
   IsNotEmpty,
   IsOptional,
   IsString,
+  Max,
   Min,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -22,17 +24,34 @@ export class CreateJobDto {
   @IsNotEmpty()
   sourceLanguage!: string;
 
+  @IsOptional()
   @IsString()
   @IsNotEmpty()
-  targetLanguage!: string;
+  targetLanguage?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  targetLanguages?: string[];
 
   @Type(() => Number)
   @IsInt()
   @Min(0)
   sourceTrackIndex!: number;
 
-  @IsIn(['manual', 'batch'])
-  triggeredBy!: 'manual' | 'batch';
+  @IsIn(['manual', 'batch', 'auto-scan'])
+  triggeredBy!: 'manual' | 'batch' | 'auto-scan';
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(10)
+  priority?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  respectProfiles?: boolean;
 
   @IsOptional()
   @IsBoolean()

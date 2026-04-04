@@ -5,6 +5,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { subsyncConfig, type SubsyncEnvConfig } from './config/subsync.config';
+import { DatabaseModule } from './database/database.module';
 import { SettingsModule } from './settings/settings.module';
 import { LibraryModule } from './library/library.module';
 import { RulesModule } from './rules/rules.module';
@@ -13,6 +14,10 @@ import { TranslationModule } from './translation/translation.module';
 import { OutputModule } from './output/output.module';
 import { JobsModule } from './jobs/jobs.module';
 import { SystemModule } from './system/system.module';
+import { StatsModule } from './stats/stats.module';
+import { ProfilesModule } from './profiles/profiles.module';
+import { GlossaryModule } from './glossary/glossary.module';
+import { IntegrationsModule } from './integrations/integrations.module';
 
 @Module({
   imports: [
@@ -20,6 +25,7 @@ import { SystemModule } from './system/system.module';
       isGlobal: true,
       load: [subsyncConfig],
     }),
+    DatabaseModule,
     ScheduleModule.forRoot(),
     BullModule.forRootAsync({
       inject: [ConfigService],
@@ -51,6 +57,10 @@ import { SystemModule } from './system/system.module';
     OutputModule,
     JobsModule,
     SystemModule,
+    StatsModule,
+    ProfilesModule,
+    GlossaryModule,
+    IntegrationsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

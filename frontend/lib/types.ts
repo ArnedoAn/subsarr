@@ -70,12 +70,26 @@ export interface SettingsPayload {
   targetLanguage: string;
   openRouterApiKeyMasked: string;
   deepSeekApiKeyMasked: string;
+  openRouterModel: string;
+  deepSeekModel: string;
   scanCacheTtlMinutes: number;
   concurrency: number;
   pathContainsExclusions: string[];
   fileTooLargeBytes?: number;
   translationVerificationEnabled: boolean;
   rules: Array<{ id: string; enabled: boolean }>;
+  autoScanEnabled: boolean;
+  autoScanCronExpression: string;
+  autoTranslateNewItems: boolean;
+  telegramBotTokenMasked: string;
+  telegramChatId?: string;
+  telegramEnabled: boolean;
+  telegramEvents: string[];
+  dailyTokenLimitFree?: number;
+  dailyTokenLimitPaid?: number;
+  monthlyBudgetUsd?: number;
+  jellyfinUrl?: string;
+  jellyfinApiKeyMasked: string;
 }
 
 export interface JobResult {

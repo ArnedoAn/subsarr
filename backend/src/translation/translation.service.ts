@@ -5,6 +5,7 @@ import {
   TranslationVerificationService,
   type FailedLine,
 } from './translation-verification.service';
+import { SettingsService } from '../settings/settings.service';
 
 export type TranslationTier = 'free' | 'paid';
 
@@ -48,6 +49,7 @@ export class TranslationService {
 
   constructor(
     private readonly verificationService: TranslationVerificationService,
+    private readonly settingsService: SettingsService,
   ) {}
 
   private async runWithConcurrency<T>(
@@ -101,8 +103,16 @@ export class TranslationService {
         details?: any;
       }) => void;
       onLogFailedLine?: (line: FailedLine) => void;
+      /** Extra system instructions (e.g. glossary). */
+      glossaryHint?: string;
     },
   ): Promise<TranslationResult> {
+    const settings = await this.settingsService.getSettings();
+    const llmModels = {
+      openRouter: settings.openRouterModel,
+      deepSeek: settings.deepSeekModel,
+    };
+
     const output = [...lines];
     let tierUsed: TranslationTier =
       options?.provider === 'deepseek' ? 'paid' : 'free';
@@ -112,6 +122,9 @@ export class TranslationService {
 
     const totalBatches = Math.ceil(lines.length / (BATCH_SIZE - OVERLAP_SIZE));
     let batchIndex = 0;
+    const glossaryHint = options?.glossaryHint?.trim()
+      ? `${options.glossaryHint.trim()}\n\n`
+      : '';
 
     const tasks = [];
 
@@ -144,6 +157,8 @@ export class TranslationService {
           openRouterApiKey,
           deepSeekApiKey,
           options?.provider,
+          llmModels,
+          glossaryHint,
         );
 
         return { start, result };
@@ -257,6 +272,8 @@ export class TranslationService {
               openRouterApiKey,
               deepSeekApiKey,
               options.provider,
+              llmModels,
+              glossaryHint,
             );
 
             if (singleResult.translated.length === 1) {
@@ -328,7 +345,9 @@ export class TranslationService {
     targetLanguage: string,
     openRouterApiKey: string,
     deepSeekApiKey: string,
-    provider?: 'openrouter' | 'deepseek',
+    provider: 'openrouter' | 'deepseek' | undefined,
+    llmModels: { openRouter: string; deepSeek: string },
+    glossaryHint: string,
   ): Promise<BatchResult> {
     const firstAttempt = await this.callLLM(
       batch,
@@ -336,6 +355,8 @@ export class TranslationService {
       openRouterApiKey,
       deepSeekApiKey,
       provider,
+      llmModels,
+      glossaryHint,
     );
     if (this.isValidBatchLength(batch, firstAttempt.translated)) {
       return firstAttempt;
@@ -347,6 +368,8 @@ export class TranslationService {
       openRouterApiKey,
       deepSeekApiKey,
       provider,
+      llmModels,
+      glossaryHint,
     );
     if (this.isValidBatchLength(batch, retryAttempt.translated)) {
       return retryAttempt;
@@ -373,20 +396,40 @@ export class TranslationService {
     targetLanguage: string,
     openRouterApiKey: string,
     deepSeekApiKey: string,
-    provider?: 'openrouter' | 'deepseek',
+    provider: 'openrouter' | 'deepseek' | undefined,
+    llmModels: { openRouter: string; deepSeek: string },
+    glossaryHint: string,
   ): Promise<BatchResult> {
     if (provider === 'deepseek') {
-      return await this.callDeepSeek(batch, targetLanguage, deepSeekApiKey);
+      return await this.callDeepSeek(
+        batch,
+        targetLanguage,
+        deepSeekApiKey,
+        llmModels.deepSeek,
+        glossaryHint,
+      );
     }
 
     try {
-      return await this.callOpenRouter(batch, targetLanguage, openRouterApiKey);
+      return await this.callOpenRouter(
+        batch,
+        targetLanguage,
+        openRouterApiKey,
+        llmModels.openRouter,
+        glossaryHint,
+      );
     } catch (error) {
       if (this.isExhaustedError(error)) {
         this.logger.warn(
           'OpenRouter free tier exhausted - falling back to DeepSeek',
         );
-        return await this.callDeepSeek(batch, targetLanguage, deepSeekApiKey);
+        return await this.callDeepSeek(
+          batch,
+          targetLanguage,
+          deepSeekApiKey,
+          llmModels.deepSeek,
+          glossaryHint,
+        );
       }
 
       throw error;
@@ -397,6 +440,8 @@ export class TranslationService {
     batch: string[],
     targetLanguage: string,
     apiKey: string,
+    model: string,
+    glossaryHint: string,
   ): Promise<BatchResult> {
     try {
       const httpResponse = await fetch(OPENROUTER_CHAT_URL, {
@@ -406,12 +451,12 @@ export class TranslationService {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: 'openrouter/free',
+          model,
           response_format: { type: 'json_object' },
           messages: [
             {
               role: 'system',
-              content: `Translate to ${targetLanguage}. Output strictly JSON object: {"data":["translated1",...]}. Keep exact array length.`,
+              content: `${glossaryHint}Translate to ${targetLanguage}. Output strictly JSON object: {"data":["translated1",...]}. Keep exact array length.`,
             },
             {
               role: 'user',
@@ -483,6 +528,8 @@ export class TranslationService {
     batch: string[],
     targetLanguage: string,
     apiKey: string,
+    model: string,
+    glossaryHint: string,
   ): Promise<BatchResult> {
     const client = new OpenAI({
       baseURL: 'https://api.deepseek.com',
@@ -490,13 +537,13 @@ export class TranslationService {
     });
 
     const response = (await client.chat.completions.create({
-      model: 'deepseek-chat',
+      model,
       temperature: 1.3,
       response_format: { type: 'json_object' },
       messages: [
         {
           role: 'system',
-          content: `Translate to ${targetLanguage}. Output strictly JSON object: {"data":["translated1",...]}. Keep exact array length.`,
+          content: `${glossaryHint}Translate to ${targetLanguage}. Output strictly JSON object: {"data":["translated1",...]}. Keep exact array length.`,
         },
         {
           role: 'user',
