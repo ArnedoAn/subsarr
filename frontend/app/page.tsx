@@ -4,20 +4,18 @@ import Link from 'next/link';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { apiGet, apiPost } from '@/lib/api';
 import { readLibraryFiltersCache, writeLibraryFiltersCache } from '@/lib/library-filters-cache';
-import { type MediaItem, type SettingsPayload } from '@/lib/types';
+import { type MediaItemWithRuleStatus, type SettingsPayload } from '@/lib/types';
 import { COMMON_LANGUAGES } from '@/lib/languages';
+import { BatchQueueModal } from '@/components/batch-queue-modal';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { SkeletonRow } from '@/components/ui/skeleton';
 import { useToast } from '@/components/ui/toast';
 
-interface RuleStatus { skip: boolean; reason?: string; }
-interface MediaItemWithRules extends MediaItem { ruleStatus: RuleStatus; }
-
 export default function LibraryPage() {
   const { success, error: toastError } = useToast();
-  const [items, setItems]         = useState<MediaItemWithRules[]>([]);
+  const [items, setItems]         = useState<MediaItemWithRuleStatus[]>([]);
   const [query, setQuery]         = useState('');
   const [targetLangFilter, setTargetLangFilter] = useState('spa');
   const [statusFilter, setStatusFilter]         = useState<'all' | 'ready' | 'skipped' | 'no-source'>('all');
@@ -25,8 +23,9 @@ export default function LibraryPage() {
   const [selected, setSelected]   = useState<Record<string, boolean>>({});
   const [loading, setLoading]     = useState(true);
   const [rescanning, setRescanning] = useState(false);
-  const [translating, setTranslating] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(true);
+  const [batchModalOpen, setBatchModalOpen] = useState(false);
+  const [batchModalItems, setBatchModalItems] = useState<MediaItemWithRuleStatus[]>([]);
 
   const [batchSource, setBatchSource]     = useState('eng');
   const [batchTarget, setBatchTarget]     = useState('spa');
@@ -106,7 +105,7 @@ export default function LibraryPage() {
     setLoading(true);
     try {
       const [itemsRes, settingsRes] = await Promise.all([
-        apiGet<MediaItemWithRules[]>('/library?includeRules=true'),
+        apiGet<MediaItemWithRuleStatus[]>('/library?includeRules=true'),
         apiGet<SettingsPayload>('/settings').catch(() => null),
       ]);
       setItems(itemsRes);
@@ -125,7 +124,7 @@ export default function LibraryPage() {
   const rescan = useCallback(async () => {
     setRescanning(true);
     try {
-      const res = await apiPost<MediaItemWithRules[]>('/library/rescan');
+      const res = await apiPost<MediaItemWithRuleStatus[]>('/library/rescan');
       setItems(res);
       success('Library rescanned successfully');
     } catch (err) {
@@ -171,7 +170,30 @@ export default function LibraryPage() {
   }, [filtered.length, itemsPerPage, totalPages, currentPage]);
 
   const paginated     = filtered.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
-  const selectedItems = filtered.filter(item => selected[item.id]);
+  const selectedItemsAll = useMemo(
+    () => items.filter(item => selected[item.id]),
+    [items, selected],
+  );
+
+  const openBatchModal = () => {
+    if (selectedItemsAll.length > 0) {
+      setBatchModalItems(selectedItemsAll);
+      setBatchModalOpen(true);
+      return;
+    }
+    if (folderFilter !== 'all') {
+      const scope = items.filter(item => {
+        const dir = item.path.substring(0, item.path.lastIndexOf('/'));
+        return dir === folderFilter || dir.startsWith(`${folderFilter}/`);
+      });
+      if (scope.length > 0) {
+        setBatchModalItems(scope);
+        setBatchModalOpen(true);
+        return;
+      }
+    }
+    toastError('Selecciona archivos en la tabla o elige una carpeta en los filtros.');
+  };
 
   const toggleSelection = (id: string) => setSelected(prev => ({ ...prev, [id]: !prev[id] }));
 
@@ -190,33 +212,6 @@ export default function LibraryPage() {
   const allSelected  = filtered.length > 0 && filtered.every(item => selected[item.id]);
   const someSelected = filtered.some(item => selected[item.id]) && !allSelected;
 
-  const translateSelected = async () => {
-    if (selectedItems.length === 0) return;
-    setTranslating(true);
-    try {
-      const jobs = selectedItems
-        .filter(item => item.subtitleTracks.length > 0)
-        .map(item => {
-          const track = item.subtitleTracks.find(t => t.language === batchSource) ?? item.subtitleTracks[0];
-          return { mediaItemId: item.id, mediaItemPath: item.path, sourceTrackIndex: track.index };
-        });
-      await apiPost('/jobs/batch', {
-        items: jobs,
-        sourceLanguage: batchSource,
-        targetLanguage: batchTarget,
-        triggeredBy: 'batch',
-        forceBypassRules: false,
-        provider: batchProvider,
-      });
-      success(`Queued ${jobs.length} translation job${jobs.length !== 1 ? 's' : ''}`);
-      setSelected({});
-    } catch (err) {
-      toastError(err instanceof Error ? err.message : 'Failed to queue jobs');
-    } finally {
-      setTranslating(false);
-    }
-  };
-
   const activeFiltersCount = [
     folderFilter !== 'all',
     statusFilter !== 'all',
@@ -233,6 +228,14 @@ export default function LibraryPage() {
           <p className="text-sm text-on-surface-variant mt-0.5">Media files and subtitle status</p>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
+          <Button
+            variant="secondary"
+            size="sm"
+            iconLeft="playlist_add"
+            onClick={() => openBatchModal()}
+          >
+            Encolar lote…
+          </Button>
           <Button
             variant="secondary"
             size="sm"
@@ -542,15 +545,15 @@ export default function LibraryPage() {
       </div>
 
       {/* Floating Batch Action Bar */}
-      {selectedItems.length > 0 && (
+      {selectedItemsAll.length > 0 && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-30 w-full max-w-2xl px-4">
           <div className="bg-surface-container-highest border border-outline-variant/30 rounded-xl shadow-2xl px-4 py-3 flex flex-col sm:flex-row items-start sm:items-center gap-3 fade-in">
             {/* Selection info */}
             <div className="flex items-center gap-2 text-sm font-medium text-on-surface flex-shrink-0">
               <span className="bg-primary-container text-on-primary-container text-xs font-bold px-2 py-0.5 rounded">
-                {selectedItems.length}
+                {selectedItemsAll.length}
               </span>
-              item{selectedItems.length !== 1 ? 's' : ''} selected
+              item{selectedItemsAll.length !== 1 ? 's' : ''} selected
             </div>
 
             {/* Language + Provider selectors */}
@@ -598,16 +601,45 @@ export default function LibraryPage() {
               <Button
                 variant="primary"
                 size="sm"
-                loading={translating}
-                iconLeft="translate"
-                onClick={() => void translateSelected()}
+                iconLeft="fact_check"
+                onClick={() => openBatchModal()}
               >
-                Translate {selectedItems.length > 0 ? `(${selectedItems.length})` : ''}
+                Revisar y encolar
+                {selectedItemsAll.length > 0 ? ` (${selectedItemsAll.length})` : ''}
               </Button>
             </div>
           </div>
         </div>
       )}
+
+      <BatchQueueModal
+        open={batchModalOpen}
+        onClose={() => setBatchModalOpen(false)}
+        items={batchModalItems}
+        initialSource={batchSource}
+        initialTarget={batchTarget}
+        initialProvider={batchProvider}
+        onEnqueued={({ queued, failed, errors }) => {
+          if (failed === 0) {
+            success(
+              `Encolados: ${queued} trabajo${queued !== 1 ? 's' : ''}`,
+            );
+            setSelected({});
+          } else if (queued > 0) {
+            success(
+              `Encolados: ${queued}, fallidos: ${failed}`,
+            );
+            toastError(
+              errors.slice(0, 4).join(' · ') +
+                (errors.length > 4 ? ` … (+${errors.length - 4})` : ''),
+            );
+          } else {
+            toastError(
+              errors[0] ?? 'No se pudo encolar ningún trabajo',
+            );
+          }
+        }}
+      />
     </section>
   );
 }

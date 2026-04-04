@@ -26,6 +26,29 @@ export interface MediaItem {
   };
 }
 
+/** Library list with `includeRules=true` (ruleStatus is always set). */
+export interface MediaItemWithRuleStatus extends MediaItem {
+  ruleStatus: { skip: boolean; reason?: string };
+}
+
+export type BatchPreviewRow = {
+  mediaItemId: string;
+  status:
+    | 'ready'
+    | 'no_source_track'
+    | 'rule_blocked'
+    | 'not_found'
+    | 'error';
+  sourceTrackIndex?: number;
+  reason?: string;
+};
+
+export type BatchEnqueueResultItem = {
+  mediaItemId: string;
+  id?: string | number;
+  error?: string;
+};
+
 export interface RuleEvaluation {
   id: string;
   label: string;

@@ -5,6 +5,7 @@ import { type CreateJobDto } from './dto/create-job.dto';
 import { type JobReturnValue, type TranslationJobPayload } from './jobs.types';
 import { OutputService } from '../output/output.service';
 import { type CreateBatchJobsDto } from './dto/create-batch-jobs.dto';
+import { type BatchPreviewDto } from './dto/batch-preview.dto';
 import { LibraryService } from '../library/library.service';
 import { RulesService } from '../rules/rules.service';
 import { JobLogsService } from './job-logs.service';
@@ -206,6 +207,82 @@ export class JobsService {
         results.push({
           mediaItemId: item.mediaItemId,
           error: error instanceof Error ? error.message : 'Failed to enqueue',
+        });
+      }
+    }
+
+    return results;
+  }
+
+  async previewBatch(dto: BatchPreviewDto) {
+    const sourceLanguage = this.normalizeLanguage(dto.sourceLanguage);
+    const targetLanguage = this.normalizeLanguage(dto.targetLanguage);
+
+    const results: Array<{
+      mediaItemId: string;
+      status:
+        | 'ready'
+        | 'no_source_track'
+        | 'rule_blocked'
+        | 'not_found'
+        | 'error';
+      sourceTrackIndex?: number;
+      reason?: string;
+    }> = [];
+
+    for (const { mediaItemId } of dto.items) {
+      try {
+        const item = await this.libraryService.getById(mediaItemId);
+        const track = item.subtitleTracks.find(
+          (t) => t.language === sourceLanguage,
+        );
+        if (!track) {
+          results.push({
+            mediaItemId,
+            status: 'no_source_track',
+            reason: `No embedded subtitle track for language "${sourceLanguage}"`,
+          });
+          continue;
+        }
+
+        this.validateSourceTrack(item, track.index);
+
+        if (!dto.forceBypassRules) {
+          const ruleResult = await this.rulesService.evaluate(item, {
+            sourceLanguage,
+            targetLanguage,
+            targetConflictResolution: dto.targetConflictResolution,
+          });
+          if (ruleResult.skip) {
+            results.push({
+              mediaItemId,
+              status: 'rule_blocked',
+              sourceTrackIndex: track.index,
+              reason: ruleResult.reason ?? 'Blocked by rules',
+            });
+            continue;
+          }
+        }
+
+        results.push({
+          mediaItemId,
+          status: 'ready',
+          sourceTrackIndex: track.index,
+        });
+      } catch (error) {
+        if (error instanceof NotFoundException) {
+          results.push({
+            mediaItemId,
+            status: 'not_found',
+            reason: 'Media item not found',
+          });
+          continue;
+        }
+        results.push({
+          mediaItemId,
+          status: 'error',
+          reason:
+            error instanceof Error ? error.message : 'Unknown preview error',
         });
       }
     }

@@ -13,6 +13,7 @@ import { CreateJobDto } from './dto/create-job.dto';
 import { JobsService } from './jobs.service';
 import { JobsEventsService } from './jobs-events.service';
 import { CreateBatchJobsDto } from './dto/create-batch-jobs.dto';
+import { BatchPreviewDto } from './dto/batch-preview.dto';
 import { LogsQueryDto } from './dto/logs-query.dto';
 
 @Controller('jobs')
@@ -30,6 +31,11 @@ export class JobsController {
   @Post('batch')
   async enqueueBatch(@Body() dto: CreateBatchJobsDto) {
     return this.jobsService.enqueueBatch(dto);
+  }
+
+  @Post('batch/preview')
+  async previewBatch(@Body() dto: BatchPreviewDto) {
+    return this.jobsService.previewBatch(dto);
   }
 
   @Get()
