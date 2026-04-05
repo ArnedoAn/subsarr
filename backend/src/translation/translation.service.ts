@@ -6,6 +6,7 @@ import {
   type FailedLine,
 } from './translation-verification.service';
 import { SettingsService } from '../settings/settings.service';
+import { estimateDeepSeekCostUsd } from '../settings/deepseek-pricing';
 
 export type TranslationTier = 'free' | 'paid';
 
@@ -102,6 +103,15 @@ export class TranslationService {
         message: string;
         details?: any;
       }) => void;
+      /** Fires after each translation batch completes (serialized); includes cumulative totals. */
+      onTokenUpdate?: (info: {
+        promptTokens: number;
+        completionTokens: number;
+        totalTokens: number;
+        tierUsed: TranslationTier;
+        estimatedCostUsd: number;
+        usageByTier: Record<TranslationTier, TranslationUsage>;
+      }) => void | Promise<void>;
       onLogFailedLine?: (line: FailedLine) => void;
       /** Extra system instructions (e.g. glossary). */
       glossaryHint?: string;
@@ -116,9 +126,51 @@ export class TranslationService {
     const output = [...lines];
     let tierUsed: TranslationTier =
       options?.provider === 'deepseek' ? 'paid' : 'free';
-    let promptTokens = 0;
-    let completionTokens = 0;
     const warnings: string[] = [];
+
+    const usageByTier: Record<TranslationTier, TranslationUsage> = {
+      free: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      paid: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+    };
+    let tokenNotifyChain: Promise<void> = Promise.resolve();
+
+    const emitTokenUpdate = (): Promise<void> => {
+      if (!options?.onTokenUpdate) {
+        return Promise.resolve();
+      }
+      const { free, paid } = usageByTier;
+      const promptTokensAcc = free.promptTokens + paid.promptTokens;
+      const completionTokensAcc =
+        free.completionTokens + paid.completionTokens;
+      return Promise.resolve(
+        options.onTokenUpdate({
+          promptTokens: promptTokensAcc,
+          completionTokens: completionTokensAcc,
+          totalTokens: promptTokensAcc + completionTokensAcc,
+          tierUsed: paid.totalTokens > 0 ? 'paid' : 'free',
+          estimatedCostUsd: estimateDeepSeekCostUsd(
+            paid.promptTokens,
+            paid.completionTokens,
+          ),
+          usageByTier: {
+            free: { ...free },
+            paid: { ...paid },
+          },
+        }),
+      );
+    };
+
+    /** Serialize usage mutations (concurrent batches) and optionally notify. */
+    const scheduleTokenUpdateFromBatch = (result: BatchResult): void => {
+      const tier = result.tierUsed;
+      const u = result.usage;
+      tokenNotifyChain = tokenNotifyChain.then(async () => {
+        usageByTier[tier].promptTokens += u.promptTokens;
+        usageByTier[tier].completionTokens += u.completionTokens;
+        usageByTier[tier].totalTokens += u.totalTokens;
+        await emitTokenUpdate();
+      });
+    };
 
     const totalBatches = Math.ceil(lines.length / (BATCH_SIZE - OVERLAP_SIZE));
     let batchIndex = 0;
@@ -161,6 +213,8 @@ export class TranslationService {
           glossaryHint,
         );
 
+        scheduleTokenUpdateFromBatch(result);
+
         return { start, result };
       });
     }
@@ -168,6 +222,7 @@ export class TranslationService {
     // Process tasks with controlled concurrency (e.g., 5 concurrent requests)
     const concurrency = options?.provider === 'openrouter' ? 3 : 5;
     const results = await this.runWithConcurrency(tasks, concurrency);
+    await tokenNotifyChain;
 
     for (const { start, result } of results) {
       const effectiveStart = start === 0 ? 0 : OVERLAP_SIZE;
@@ -181,13 +236,15 @@ export class TranslationService {
         tierUsed = 'paid';
       }
 
-      promptTokens += result.usage.promptTokens;
-      completionTokens += result.usage.completionTokens;
-
       if (result.warning) {
         warnings.push(result.warning);
       }
     }
+
+    const promptTokens =
+      usageByTier.free.promptTokens + usageByTier.paid.promptTokens;
+    const completionTokens =
+      usageByTier.free.completionTokens + usageByTier.paid.completionTokens;
 
     if (!options?.verificationEnabled) {
       return {
@@ -290,9 +347,13 @@ export class TranslationService {
                 output[failed.index] = newTranslation;
                 retrySuccess = true;
                 fixedByRetry++;
-                promptTokens += singleResult.usage.promptTokens;
-                completionTokens += singleResult.usage.completionTokens;
+                const st = singleResult.tierUsed;
+                usageByTier[st].promptTokens += singleResult.usage.promptTokens;
+                usageByTier[st].completionTokens +=
+                  singleResult.usage.completionTokens;
+                usageByTier[st].totalTokens += singleResult.usage.totalTokens;
                 if (singleResult.tierUsed === 'paid') tierUsed = 'paid';
+                await emitTokenUpdate();
                 this.logger.log(
                   `Line ${failed.index + 1} re-translated successfully on attempt ${attempt}`,
                 );
@@ -316,13 +377,18 @@ export class TranslationService {
     const finalFailedCount = verification.failedLines.length - fixedByRetry;
     const finalPassedLines = lines.length - finalFailedCount;
 
+    const finalPrompt =
+      usageByTier.free.promptTokens + usageByTier.paid.promptTokens;
+    const finalCompletion =
+      usageByTier.free.completionTokens + usageByTier.paid.completionTokens;
+
     return {
       lines: output,
       tierUsed,
       usage: {
-        promptTokens,
-        completionTokens,
-        totalTokens: promptTokens + completionTokens,
+        promptTokens: finalPrompt,
+        completionTokens: finalCompletion,
+        totalTokens: finalPrompt + finalCompletion,
       },
       warnings,
       verification: {

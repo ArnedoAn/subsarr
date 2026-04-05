@@ -6,11 +6,25 @@ import {
   type TranslationUsage,
 } from '../translation/translation.service';
 import { TokenUsageRowEntity } from '../database/entities/token-usage-row.entity';
-import { type TokenUsageSummary } from './dto/token-usage-summary.dto';
+import {
+  type TierUsageSummary,
+  type TokenUsageSummary,
+} from './dto/token-usage-summary.dto';
+import { estimateDeepSeekCostUsd } from './deepseek-pricing';
 
 @Injectable()
 export class TokenUsageService {
   private readonly logger = new Logger(TokenUsageService.name);
+
+  /** USD estimate for DeepSeek paid tier (cache-miss input pricing). Free tier → 0. */
+  static estimateCostUsd(
+    tier: 'free' | 'paid',
+    promptTokens: number,
+    completionTokens: number,
+  ): number {
+    if (tier === 'free') return 0;
+    return estimateDeepSeekCostUsd(promptTokens, completionTokens);
+  }
 
   constructor(
     @InjectRepository(TokenUsageRowEntity)
@@ -47,9 +61,7 @@ export class TokenUsageService {
       .getMany();
     const prompt = rows.reduce((a, r) => a + r.promptTokens, 0);
     const completion = rows.reduce((a, r) => a + r.completionTokens, 0);
-    const paidInputCost = (prompt / 1_000_000) * 0.14;
-    const paidOutputCost = (completion / 1_000_000) * 0.28;
-    return Number((paidInputCost + paidOutputCost).toFixed(6));
+    return estimateDeepSeekCostUsd(prompt, completion);
   }
 
   async addUsage(tier: TranslationTier, usage: TranslationUsage): Promise<void> {
@@ -76,6 +88,34 @@ export class TokenUsageService {
     }
   }
 
+  /** Aggregates for the current UTC date (rows in DB for today). */
+  private async getTodayTierTotals(): Promise<{
+    free: TierUsageSummary;
+    paid: TierUsageSummary;
+  }> {
+    const date = this.todayUtc();
+    const rows = await this.usageRepo.find({ where: { date } });
+    const empty: TierUsageSummary = {
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+    };
+    const free = { ...empty };
+    const paid = { ...empty };
+    for (const r of rows) {
+      if (r.tier === 'free') {
+        free.promptTokens += r.promptTokens;
+        free.completionTokens += r.completionTokens;
+        free.totalTokens += r.totalTokens;
+      } else if (r.tier === 'paid') {
+        paid.promptTokens += r.promptTokens;
+        paid.completionTokens += r.completionTokens;
+        paid.totalTokens += r.totalTokens;
+      }
+    }
+    return { free, paid };
+  }
+
   async getSummary(): Promise<TokenUsageSummary> {
     const freeRows = await this.usageRepo.find({ where: { tier: 'free' } });
     const paidRows = await this.usageRepo.find({ where: { tier: 'paid' } });
@@ -98,15 +138,23 @@ export class TokenUsageService {
       { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
     );
 
-    const paidInputCost = (paid.promptTokens / 1_000_000) * 0.14;
-    const paidOutputCost = (paid.completionTokens / 1_000_000) * 0.28;
+    const today = await this.getTodayTierTotals();
 
     return {
       free,
       paid,
-      deepSeekEstimatedCostUsd: Number(
-        (paidInputCost + paidOutputCost).toFixed(6),
+      deepSeekEstimatedCostUsd: estimateDeepSeekCostUsd(
+        paid.promptTokens,
+        paid.completionTokens,
       ),
+      today: {
+        free: today.free,
+        paid: today.paid,
+        deepSeekEstimatedCostUsd: estimateDeepSeekCostUsd(
+          today.paid.promptTokens,
+          today.paid.completionTokens,
+        ),
+      },
     };
   }
 

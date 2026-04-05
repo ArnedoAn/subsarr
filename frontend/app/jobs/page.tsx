@@ -10,11 +10,52 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { ProgressBar } from '@/components/ui/progress-bar';
 import { useToast } from '@/components/ui/toast';
 
+interface LiveTokenUsage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  tierUsed: string;
+  estimatedCostUsd: number;
+}
+
 interface LiveEvent {
   phase: string;
   progressPercent: number;
   message: string;
   timestamp: string;
+  details?: unknown;
+  tokenUsage?: LiveTokenUsage;
+}
+
+interface TokenUsageSummary {
+  free: { promptTokens: number; completionTokens: number; totalTokens: number };
+  paid: { promptTokens: number; completionTokens: number; totalTokens: number };
+  deepSeekEstimatedCostUsd: number;
+  today?: {
+    free: { promptTokens: number; completionTokens: number; totalTokens: number };
+    paid: { promptTokens: number; completionTokens: number; totalTokens: number };
+    deepSeekEstimatedCostUsd: number;
+  };
+}
+
+/** Align with backend deepseek-pricing (cache-miss input). */
+function estimateDeepSeekCostUsdClient(promptTokens: number, completionTokens: number): number {
+  return Number(
+    ((promptTokens / 1_000_000) * 0.28 + (completionTokens / 1_000_000) * 0.42).toFixed(6),
+  );
+}
+
+function formatTokenShort(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return String(n);
+}
+
+function costUsdTextClass(usd: number | null | undefined): string {
+  if (usd == null || !Number.isFinite(usd)) return 'text-on-surface-variant';
+  if (usd < 0.01) return 'text-green-600 dark:text-green-400';
+  if (usd <= 0.05) return 'text-amber-600 dark:text-amber-400';
+  return 'text-red-600 dark:text-red-400';
 }
 
 interface LogEntry {
@@ -95,20 +136,23 @@ export default function JobsPage() {
   const [search, setSearch]         = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'waiting' | 'active' | 'completed' | 'failed'>('all');
   const [now, setNow]               = useState(0);
+  const [tokenSummary, setTokenSummary] = useState<TokenUsageSummary | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
-    const [jobsRes, logsRes] = await Promise.all([
+    const [jobsRes, logsRes, tokenRes] = await Promise.all([
       apiGet<JobResult[]>('/jobs'),
       apiGet<{ items: LogEntry[] }>('/jobs/logs/all?limit=20').catch(() => ({ items: [] as LogEntry[] })),
+      apiGet<TokenUsageSummary>('/settings/token-usage').catch(() => null),
     ]);
     setJobs(jobsRes);
     setLogs(logsRes.items ?? []);
+    if (tokenRes) setTokenSummary(tokenRes);
   }, []);
 
   useEffect(() => {
     void load();
-    const t = setInterval(() => void load(), 4000);
+    const t = setInterval(() => void load(), 10_000);
     return () => clearInterval(t);
   }, [load]);
 
@@ -199,6 +243,33 @@ export default function JobsPage() {
         <StatCard label="Completed" value={stats.completed} icon="check_circle"    variant="success" />
         <StatCard label="Failed"    value={stats.failed}    icon="error"           variant="error" />
       </div>
+
+      {/* Tokens hoy (UTC) — mismo polling que jobs */}
+      {tokenSummary?.today && (
+        <div className="bg-surface-container rounded-lg p-4 border border-outline-variant/15 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <span className="material-symbols-outlined text-[28px] text-primary shrink-0" style={{ fontVariationSettings: 'FILL 1' }}>
+              token
+            </span>
+            <div className="min-w-0">
+              <p className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">Tokens hoy (UTC)</p>
+              <p className="text-sm text-on-surface mt-0.5">
+                <span className="font-mono">Free</span>{' '}
+                <span className="font-mono font-semibold">{formatTokenShort(tokenSummary.today.free.totalTokens)}</span>
+                <span className="text-on-surface-variant mx-2">·</span>
+                <span className="font-mono">Paid</span>{' '}
+                <span className="font-mono font-semibold">{formatTokenShort(tokenSummary.today.paid.totalTokens)}</span>
+                <span className={`font-mono font-semibold ml-1.5 ${costUsdTextClass(tokenSummary.today.deepSeekEstimatedCostUsd)}`}>
+                  (${tokenSummary.today.deepSeekEstimatedCostUsd.toFixed(4)})
+                </span>
+              </p>
+            </div>
+          </div>
+          <p className="text-[11px] text-on-surface-variant sm:text-right shrink-0">
+            Coste estimado DeepSeek (cache miss) sobre tokens paid del día
+          </p>
+        </div>
+      )}
 
       {/* Job Queue */}
       <div className="bg-surface-container rounded-lg overflow-hidden">
@@ -366,11 +437,38 @@ export default function JobsPage() {
                           <td className="px-4 py-3">
                             <PhaseBadge phase={phase} />
                           </td>
-                          <td className="px-4 py-3 text-xs font-mono text-on-surface-variant whitespace-nowrap">
-                            {job.returnValue?.usage.totalTokens
-                              ? `${(job.returnValue.usage.totalTokens / 1000).toFixed(1)}k`
-                              : '—'
-                            }
+                          <td className="px-4 py-3 text-xs font-mono whitespace-nowrap">
+                            {(() => {
+                              const liveUsage = live?.tokenUsage;
+                              const total =
+                                liveUsage?.totalTokens ??
+                                job.returnValue?.usage.totalTokens;
+                              if (!total) {
+                                return <span className="text-on-surface-variant">—</span>;
+                              }
+                              const costUsd =
+                                liveUsage?.estimatedCostUsd ??
+                                (job.returnValue?.tierUsed === 'paid' && job.returnValue.usage
+                                  ? estimateDeepSeekCostUsdClient(
+                                      job.returnValue.usage.promptTokens,
+                                      job.returnValue.usage.completionTokens,
+                                    )
+                                  : null);
+                              const tip =
+                                liveUsage || job.returnValue?.usage
+                                  ? `Prompt: ${(liveUsage?.promptTokens ?? job.returnValue?.usage.promptTokens ?? 0).toLocaleString()} · Completion: ${(liveUsage?.completionTokens ?? job.returnValue?.usage.completionTokens ?? 0).toLocaleString()} · Tier: ${liveUsage?.tierUsed ?? job.returnValue?.tierUsed ?? '—'}`
+                                  : '';
+                              return (
+                                <span title={tip} className="cursor-default">
+                                  <span className="text-on-surface">{formatTokenShort(total)} tokens</span>
+                                  {costUsd != null && Number.isFinite(costUsd) ? (
+                                    <span className={` ml-1 ${costUsdTextClass(costUsd)}`}>
+                                      · ${costUsd.toFixed(4)}
+                                    </span>
+                                  ) : null}
+                                </span>
+                              );
+                            })()}
                           </td>
                           <td className="px-4 py-3 text-xs font-mono text-on-surface-variant whitespace-nowrap">
                             {formatElapsed(elapsedMs)}
@@ -516,6 +614,30 @@ export default function JobsPage() {
                     </div>
                     <div className="flex items-center gap-2 flex-wrap">
                       <PhaseBadge phase={phase} />
+                    </div>
+                    <div className="text-xs font-mono text-on-surface-variant">
+                      {(() => {
+                        const liveUsage = live?.tokenUsage;
+                        const total =
+                          liveUsage?.totalTokens ?? job.returnValue?.usage.totalTokens;
+                        if (!total) return 'Tokens: —';
+                        const costUsd =
+                          liveUsage?.estimatedCostUsd ??
+                          (job.returnValue?.tierUsed === 'paid' && job.returnValue.usage
+                            ? estimateDeepSeekCostUsdClient(
+                                job.returnValue.usage.promptTokens,
+                                job.returnValue.usage.completionTokens,
+                              )
+                            : null);
+                        return (
+                          <span title={`${liveUsage?.promptTokens ?? job.returnValue?.usage.promptTokens ?? 0} prompt · ${liveUsage?.completionTokens ?? job.returnValue?.usage.completionTokens ?? 0} completion`}>
+                            Tokens: {formatTokenShort(total)}
+                            {costUsd != null && Number.isFinite(costUsd) ? (
+                              <span className={costUsdTextClass(costUsd)}> · ${costUsd.toFixed(4)}</span>
+                            ) : null}
+                          </span>
+                        );
+                      })()}
                     </div>
                     <div className="flex items-center gap-2 flex-wrap">
                       {(job.state === 'waiting' || job.state === 'active') && (

@@ -28,12 +28,21 @@ export interface TranslationJobPayload {
   provider?: 'openrouter' | 'deepseek';
 }
 
+export interface JobProgressTokenUsage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  tierUsed: string;
+  estimatedCostUsd: number;
+}
+
 export interface JobProgressEvent {
   phase: JobPhase;
   progressPercent: number;
   message: string;
   timestamp: string;
   details?: any;
+  tokenUsage?: JobProgressTokenUsage;
 }
 
 export interface JobReturnValue {

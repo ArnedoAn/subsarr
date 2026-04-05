@@ -5,7 +5,11 @@ import { promises as fs } from 'node:fs';
 import * as jschardet from 'jschardet';
 import iconv from 'iconv-lite';
 import { ExtractionService } from '../extraction/extraction.service';
-import { type JobReturnValue, type TranslationJobPayload } from './jobs.types';
+import {
+  type JobProgressTokenUsage,
+  type JobReturnValue,
+  type TranslationJobPayload,
+} from './jobs.types';
 import { LibraryService } from '../library/library.service';
 import { RulesService } from '../rules/rules.service';
 import { SettingsService } from '../settings/settings.service';
@@ -25,6 +29,7 @@ import { JobArchiveService } from './job-archive.service';
 import { TelegramService } from '../notifications/telegram.service';
 import { GlossaryService } from '../glossary/glossary.service';
 import { JellyfinService } from '../integrations/jellyfin.service';
+import { estimateDeepSeekCostUsd } from '../settings/deepseek-pricing';
 
 @Processor('translation')
 export class TranslationJobProcessor {
@@ -61,6 +66,57 @@ export class TranslationJobProcessor {
         ? 'alternate'
         : 'default';
 
+    let lastTranslatingProgress = 25;
+    let lastTranslatingMessage = '';
+    let lastTranslatingDetails: any = undefined;
+
+    let lastPersistedFree = {
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+    };
+    let lastPersistedPaid = {
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+    };
+
+    const persistTokenUsageDelta = async (info: {
+      usageByTier: {
+        free: {
+          promptTokens: number;
+          completionTokens: number;
+          totalTokens: number;
+        };
+        paid: {
+          promptTokens: number;
+          completionTokens: number;
+          totalTokens: number;
+        };
+      };
+    }) => {
+      const uf = info.usageByTier.free;
+      const up = info.usageByTier.paid;
+      const df = {
+        promptTokens: uf.promptTokens - lastPersistedFree.promptTokens,
+        completionTokens: uf.completionTokens - lastPersistedFree.completionTokens,
+        totalTokens: uf.totalTokens - lastPersistedFree.totalTokens,
+      };
+      if (df.promptTokens !== 0 || df.completionTokens !== 0) {
+        await this.tokenUsageService.addUsage('free', df);
+        lastPersistedFree = { ...uf };
+      }
+      const dp = {
+        promptTokens: up.promptTokens - lastPersistedPaid.promptTokens,
+        completionTokens: up.completionTokens - lastPersistedPaid.completionTokens,
+        totalTokens: up.totalTokens - lastPersistedPaid.totalTokens,
+      };
+      if (dp.promptTokens !== 0 || dp.completionTokens !== 0) {
+        await this.tokenUsageService.addUsage('paid', dp);
+        lastPersistedPaid = { ...up };
+      }
+    };
+
     const publish = async (
       phase:
         | 'active'
@@ -74,6 +130,7 @@ export class TranslationJobProcessor {
       progressPercent: number,
       message: string,
       details?: any,
+      tokenUsage?: JobProgressTokenUsage,
     ) => {
       this.jobsEventsService.publish(jobId, {
         phase,
@@ -81,6 +138,7 @@ export class TranslationJobProcessor {
         message,
         timestamp: new Date().toISOString(),
         details,
+        tokenUsage,
       });
       void job.progress(progressPercent);
 
@@ -184,11 +242,9 @@ export class TranslationJobProcessor {
           throw new Error('No Dialogue lines in extracted ASS');
         }
 
-        await publish(
-          'translating',
-          25,
-          `Translating ${dialogueTexts.length} subtitle lines`,
-        );
+        lastTranslatingProgress = 25;
+        lastTranslatingMessage = `Translating ${dialogueTexts.length} subtitle lines`;
+        await publish('translating', 25, lastTranslatingMessage);
         const translated = await this.translationService.translateLines(
           dialogueTexts,
           job.data.targetLanguage,
@@ -211,13 +267,31 @@ export class TranslationJobProcessor {
               );
             },
             onProgress: async (info) => {
-              const overallProgress =
+              lastTranslatingProgress =
                 25 + Math.floor((info.progressPercent / 100) * 65);
+              lastTranslatingMessage = info.message;
+              lastTranslatingDetails = info.details;
               await publish(
                 'translating',
-                overallProgress,
+                lastTranslatingProgress,
                 info.message,
                 info.details,
+              );
+            },
+            onTokenUpdate: async (info) => {
+              await persistTokenUsageDelta(info);
+              await publish(
+                'translating',
+                lastTranslatingProgress,
+                lastTranslatingMessage,
+                lastTranslatingDetails,
+                {
+                  promptTokens: info.promptTokens,
+                  completionTokens: info.completionTokens,
+                  totalTokens: info.totalTokens,
+                  tierUsed: info.tierUsed,
+                  estimatedCostUsd: info.estimatedCostUsd,
+                },
               );
             },
             onLogFailedLine: async (failed) => {
@@ -292,8 +366,6 @@ export class TranslationJobProcessor {
           pathVariant,
         );
 
-        await this.tokenUsageService.addUsage(translated.tierUsed, translated.usage);
-
         await this.jobLogsService.append({
           jobId,
           level: 'info',
@@ -307,7 +379,16 @@ export class TranslationJobProcessor {
         });
 
         await fs.unlink(extraction.tempFilePath).catch(() => undefined);
-        await publish('completed', 100, 'Translation completed');
+        await publish('completed', 100, 'Translation completed', undefined, {
+          promptTokens: translated.usage.promptTokens,
+          completionTokens: translated.usage.completionTokens,
+          totalTokens: translated.usage.totalTokens,
+          tierUsed: translated.tierUsed,
+          estimatedCostUsd: estimateDeepSeekCostUsd(
+            lastPersistedPaid.promptTokens,
+            lastPersistedPaid.completionTokens,
+          ),
+        });
         this.jobsEventsService.complete(jobId);
 
         const assReturn: JobReturnValue = {
@@ -334,7 +415,9 @@ export class TranslationJobProcessor {
         throw new Error('Extracted subtitle track is empty');
       }
 
-      await publish('translating', 25, `Translating ${cues.length} subtitle lines`);
+      lastTranslatingProgress = 25;
+      lastTranslatingMessage = `Translating ${cues.length} subtitle lines`;
+      await publish('translating', 25, lastTranslatingMessage);
       const translated = await this.translationService.translateLines(
         cues.map((cue) => cue.text),
         job.data.targetLanguage,
@@ -357,9 +440,32 @@ export class TranslationJobProcessor {
             );
           },
           onProgress: async (info) => {
-            const overallProgress =
+            lastTranslatingProgress =
               25 + Math.floor((info.progressPercent / 100) * 65);
-            await publish('translating', overallProgress, info.message, info.details);
+            lastTranslatingMessage = info.message;
+            lastTranslatingDetails = info.details;
+            await publish(
+              'translating',
+              lastTranslatingProgress,
+              info.message,
+              info.details,
+            );
+          },
+          onTokenUpdate: async (info) => {
+            await persistTokenUsageDelta(info);
+            await publish(
+              'translating',
+              lastTranslatingProgress,
+              lastTranslatingMessage,
+              lastTranslatingDetails,
+              {
+                promptTokens: info.promptTokens,
+                completionTokens: info.completionTokens,
+                totalTokens: info.totalTokens,
+                tierUsed: info.tierUsed,
+                estimatedCostUsd: info.estimatedCostUsd,
+              },
+            );
           },
           onLogFailedLine: async (failed) => {
             if (loggedFailedLines >= MAX_FAILED_LINES_TO_LOG) {
@@ -424,8 +530,6 @@ export class TranslationJobProcessor {
         pathVariant,
       );
 
-      await this.tokenUsageService.addUsage(translated.tierUsed, translated.usage);
-
       await this.jobLogsService.append({
         jobId,
         level: 'info',
@@ -439,7 +543,16 @@ export class TranslationJobProcessor {
       });
 
       await fs.unlink(extraction.tempFilePath).catch(() => undefined);
-      await publish('completed', 100, 'Translation completed');
+      await publish('completed', 100, 'Translation completed', undefined, {
+        promptTokens: translated.usage.promptTokens,
+        completionTokens: translated.usage.completionTokens,
+        totalTokens: translated.usage.totalTokens,
+        tierUsed: translated.tierUsed,
+        estimatedCostUsd: estimateDeepSeekCostUsd(
+          lastPersistedPaid.promptTokens,
+          lastPersistedPaid.completionTokens,
+        ),
+      });
       this.jobsEventsService.complete(jobId);
 
       const srtReturn: JobReturnValue = {
