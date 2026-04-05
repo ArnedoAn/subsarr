@@ -166,7 +166,6 @@ export class TranslationJobProcessor {
       }
 
       const settings = await this.settingsService.getSettings();
-      const glossaryHint = await this.glossaryService.formatForPrompt();
       let loggedFailedLines = 0;
       const MAX_FAILED_LINES_TO_LOG = 10;
 
@@ -236,7 +235,6 @@ export class TranslationJobProcessor {
                 },
               });
             },
-            glossaryHint,
           },
         );
 
@@ -378,7 +376,6 @@ export class TranslationJobProcessor {
               },
             });
           },
-          glossaryHint,
         },
       );
 
