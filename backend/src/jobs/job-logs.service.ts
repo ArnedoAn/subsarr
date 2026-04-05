@@ -99,6 +99,22 @@ export class JobLogsService {
     return rows.map(rowToEntry);
   }
 
+  /**
+   * Borra logs de un jobId concreto.
+   * Útil al inicio de un job nuevo: si Bull reutiliza el mismo ID numérico
+   * (counter reiniciado en Redis tras un restart), evitamos mezclar logs
+   * del job anterior con los del nuevo.
+   */
+  async clearByJob(jobId: string): Promise<void> {
+    try {
+      await this.logRepo.delete({ jobId });
+    } catch (e) {
+      this.logger.warn(
+        `clearByJob(${jobId}) failed: ${e instanceof Error ? e.message : e}`,
+      );
+    }
+  }
+
   async query(query: LogsQuery): Promise<JobLogEntry[]> {
     const from = query.from ? Date.parse(query.from) : Number.NEGATIVE_INFINITY;
     const to = query.to ? Date.parse(query.to) : Number.POSITIVE_INFINITY;

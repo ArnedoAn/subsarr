@@ -100,10 +100,10 @@ export default function JobsPage() {
   const load = useCallback(async () => {
     const [jobsRes, logsRes] = await Promise.all([
       apiGet<JobResult[]>('/jobs'),
-      apiGet<LogEntry[]>('/jobs/logs/all').catch(() => [] as LogEntry[]),
+      apiGet<{ items: LogEntry[] }>('/jobs/logs/all?limit=20').catch(() => ({ items: [] as LogEntry[] })),
     ]);
     setJobs(jobsRes);
-    setLogs(logsRes.slice(0, 20));
+    setLogs(logsRes.items ?? []);
   }, []);
 
   useEffect(() => {

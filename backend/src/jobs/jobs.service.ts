@@ -2,7 +2,9 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bull';
 import type { Queue } from 'bull';
@@ -34,7 +36,9 @@ import type { TranslationProfile } from '../profiles/profile.types';
 import type { LogsQueryDto } from './dto/logs-query.dto';
 
 @Injectable()
-export class JobsService {
+export class JobsService implements OnModuleInit {
+  private readonly logger = new Logger(JobsService.name);
+
   constructor(
     @InjectQueue('translation')
     private readonly translationQueue: Queue<TranslationJobPayload>,
@@ -47,6 +51,44 @@ export class JobsService {
     private readonly tokenUsageService: TokenUsageService,
     private readonly profilesService: ProfilesService,
   ) {}
+
+  onModuleInit() {
+    // Cuando Bull detecta que el proceso murió con un job activo (stalled),
+    // lo mueve de vuelta a "waiting". Interceptamos ese evento para cancelarlo
+    // en lugar de reintentarlo, y lo archivamos como fallido.
+    this.translationQueue.on('stalled', (job) => {
+      void (async () => {
+        const jobId = String(job.id);
+        const reason = 'Job cancelado: el servidor se reinició mientras estaba en proceso';
+        this.logger.warn(`Stalled job detected [${jobId}], cancelling instead of retrying`);
+        try {
+          await this.jobLogsService.append({
+            jobId,
+            level: 'error',
+            phase: 'failed',
+            message: reason,
+          });
+          await this.jobArchiveService.appendSnapshot({
+            id: jobId,
+            state: 'failed',
+            data: job.data as TranslationJobPayload,
+            createdAt: job.timestamp,
+            processedAt: job.processedOn ?? undefined,
+            finishedAt: Date.now(),
+            progress: 0,
+            failedReason: reason,
+            logs: await this.jobLogsService.getByJob(jobId),
+          });
+          // Quitar del queue para que no se reintente
+          await job.remove();
+        } catch (e) {
+          this.logger.error(
+            `Failed to cancel stalled job [${jobId}]: ${e instanceof Error ? e.message : e}`,
+          );
+        }
+      })();
+    });
+  }
 
   async enqueue(
     dto: CreateJobDto,

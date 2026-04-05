@@ -50,6 +50,10 @@ export class TranslationJobProcessor {
   @Process({ concurrency: Number(process.env.SUBSYNC_CONCURRENCY ?? 2) })
   async handle(job: Job<TranslationJobPayload>) {
     const jobId = String(job.id);
+
+    // Si Bull reutiliza el mismo ID numérico tras un restart de Redis,
+    // borramos los logs del job anterior para evitar mezcla en los "recent logs".
+    await this.jobLogsService.clearByJob(jobId);
     const outputExtension: SubtitleOutputExtension =
       job.data.outputExtension ?? 'srt';
     const pathVariant: SubtitlePathVariant =
