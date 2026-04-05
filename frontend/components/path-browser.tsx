@@ -107,6 +107,8 @@ export function PathBrowser({ value, onChange, placeholder = "Select path..." }:
     onChange(e.target.value);
   };
 
+  const directories = entries.filter((e) => e.isDirectory);
+
   return (
     <div className="relative w-full" ref={wrapperRef}>
       <div className="relative">
@@ -118,9 +120,9 @@ export function PathBrowser({ value, onChange, placeholder = "Select path..." }:
           placeholder={placeholder}
           className="w-full engraved-input text-sm px-3 py-2.5 pr-10 text-on-surface"
         />
-        <span 
+        <span
           className="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 text-on-surface-variant cursor-pointer"
-          onClick={() => isOpen ? setIsOpen(false) : handleOpen()}
+          onClick={() => (isOpen ? setIsOpen(false) : handleOpen())}
         >
           folder_open
         </span>
@@ -128,54 +130,64 @@ export function PathBrowser({ value, onChange, placeholder = "Select path..." }:
 
       {isOpen && (
         <div className="absolute z-50 w-full mt-2 bg-[var(--surface-container-high)] rounded-lg shadow-xl border-none overflow-hidden transition-all duration-200 ease-out">
-          <div className="flex items-center p-3 bg-[var(--surface-container-highest)] border-b border-[var(--surface-variant)] text-xs text-on-surface-variant">
-            <span className="truncate flex-1 font-mono">{currentPath}</span>
-            {loading && <span className="material-symbols-outlined animate-spin text-[16px]">sync</span>}
+          {/* Current path + select button */}
+          <div className="flex items-center gap-2 px-3 py-2 bg-[var(--surface-container-highest)] border-b border-[var(--surface-variant)]">
+            <span className="material-symbols-outlined text-[16px] text-on-surface-variant flex-shrink-0">folder</span>
+            <span className="truncate flex-1 font-mono text-xs text-on-surface-variant">{currentPath}</span>
+            {loading && (
+              <span className="material-symbols-outlined animate-spin text-[16px] text-on-surface-variant">sync</span>
+            )}
+            <button
+              type="button"
+              onClick={() => handleSelect(currentPath)}
+              className="flex-shrink-0 flex items-center gap-1 text-xs font-medium px-2 py-1 rounded bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+              title="Seleccionar esta carpeta"
+            >
+              <span className="material-symbols-outlined text-[14px]">check</span>
+              Seleccionar
+            </button>
           </div>
-          
+
           <div className="max-h-64 overflow-y-auto custom-scrollbar">
+            {/* Navigate up */}
             {currentPath !== "/" && currentPath !== "" && (
-              <div 
-                className="flex items-center gap-3 p-3 hover:bg-[var(--surface-variant)] hover:text-primary cursor-pointer transition-colors duration-200"
+              <div
+                className="flex items-center gap-3 p-3 hover:bg-[var(--surface-variant)] cursor-pointer transition-colors duration-200"
                 onClick={handleNavigateUp}
               >
                 <span className="material-symbols-outlined text-lg text-on-surface-variant">arrow_upward</span>
-                <span className="text-sm">.. (Parent Directory)</span>
+                <span className="text-sm text-on-surface-variant">.. (Subir un nivel)</span>
               </div>
             )}
-            
-            {entries.map((entry) => (
-              <div 
+
+            {/* Only directories */}
+            {directories.map((entry) => (
+              <div
                 key={entry.path}
                 className="flex items-center gap-3 p-3 hover:bg-[var(--surface-variant)] group cursor-pointer transition-colors duration-200"
-                onClick={(e) => entry.isDirectory ? handleNavigate(entry.path, e) : handleSelect(entry.path, e)}
+                onClick={(e) => handleNavigate(entry.path, e)}
               >
-                <span className={`material-symbols-outlined text-lg ${entry.isDirectory ? 'text-primary' : 'text-on-surface-variant group-hover:text-on-surface'}`}>
-                  {entry.isDirectory ? 'folder' : 'description'}
-                </span>
-                <span className={`text-sm flex-1 truncate ${entry.isDirectory ? 'text-on-surface group-hover:text-primary' : 'text-on-surface-variant group-hover:text-on-surface'}`}>
+                <span className="material-symbols-outlined text-lg text-primary">folder</span>
+                <span className="text-sm flex-1 truncate text-on-surface group-hover:text-primary">
                   {entry.name}
                 </span>
-                {entry.isDirectory && (
-                  <span 
-                    className="material-symbols-outlined text-lg text-on-surface-variant opacity-0 group-hover:opacity-100 hover:text-primary transition-all duration-200"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleSelect(entry.path, e);
-                    }}
-                    title="Select this directory"
-                  >
-                    check_circle
-                  </span>
-                )}
+                {/* Enter icon */}
+                <span className="material-symbols-outlined text-[16px] text-on-surface-variant opacity-0 group-hover:opacity-100 transition-opacity">
+                  chevron_right
+                </span>
               </div>
             ))}
 
-            {!loading && entries.length === 0 && (
+            {!loading && directories.length === 0 && (
               <div className="p-4 text-center text-sm text-on-surface-variant">
-                Empty directory
+                Carpeta vacía
               </div>
             )}
+          </div>
+
+          {/* Footer hint */}
+          <div className="px-3 py-2 border-t border-[var(--surface-variant)] text-[11px] text-on-surface-variant bg-[var(--surface-container-highest)]">
+            Haz clic en una carpeta para entrar · pulsa <strong>Seleccionar</strong> para usar la carpeta actual
           </div>
         </div>
       )}
