@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { apiGet, apiPost, API_URL } from '@/lib/api';
 import { type JobResult, type MediaItem, type RuleEvaluation } from '@/lib/types';
@@ -88,6 +88,8 @@ export default function LibraryItemPage() {
   >('default');
   const [liveJobEvent, setLiveJobEvent] = useState<LiveEvent | null>(null);
   const [nowTick, setNowTick] = useState(() => Date.now());
+  const [liveRules, setLiveRules] = useState<RuleEvaluation[] | null>(null);
+  const rulesDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -97,6 +99,7 @@ export default function LibraryItemPage() {
         apiGet<JobResult[]>('/jobs'),
       ]);
       setItem(itemRes);
+      setLiveRules(itemRes.rules);
       const firstTrack = itemRes.subtitleTracks[0];
       setSourceTrackIndex(firstTrack?.index ?? null);
       setSourceLanguage(firstTrack?.language ?? 'eng');
@@ -114,9 +117,30 @@ export default function LibraryItemPage() {
     setTargetConflictResolution('default');
   }, [targetLanguage]);
 
+  // Re-evaluate rules whenever the user changes source/target language or conflict
+  // resolution so the Rules Check panel and the blocked state stay accurate.
+  useEffect(() => {
+    if (!item) return;
+    if (rulesDebounceRef.current) clearTimeout(rulesDebounceRef.current);
+    rulesDebounceRef.current = setTimeout(() => {
+      const params_qs = new URLSearchParams({
+        sourceLanguage,
+        targetLanguage,
+        targetConflictResolution,
+      });
+      void apiGet<ItemDetail>(`/library/${params.id}?${params_qs.toString()}`)
+        .then(res => setLiveRules(res.rules))
+        .catch(() => { /* keep last known rules on error */ });
+    }, 300);
+    return () => {
+      if (rulesDebounceRef.current) clearTimeout(rulesDebounceRef.current);
+    };
+  }, [item, params.id, sourceLanguage, targetLanguage, targetConflictResolution]);
+
+  const activeRules = liveRules ?? item?.rules ?? [];
+
   const isBlocked = useMemo(() => {
-    if (!item) return false;
-    return item.rules.some(rule => {
+    return activeRules.some(rule => {
       if (!rule.skip) return false;
       if (
         targetConflictResolution !== 'default' &&
@@ -127,17 +151,17 @@ export default function LibraryItemPage() {
       }
       return true;
     });
-  }, [item, targetConflictResolution]);
+  }, [activeRules, targetConflictResolution]);
 
   const hasTargetLanguageConflict = useMemo(
     () =>
-      item?.rules.some(
+      activeRules.some(
         r =>
           r.skip &&
           (r.id === 'already-has-external-subtitle' ||
             r.id === 'already-has-target-subtitle'),
-      ) ?? false,
-    [item],
+      ),
+    [activeRules],
   );
 
   const activeJobForItem = useMemo(
@@ -467,7 +491,7 @@ export default function LibraryItemPage() {
                 {!isBlocked && <Badge variant="success" icon="check">All pass</Badge>}
               </div>
               <div className="space-y-1.5">
-                {item.rules.map(rule => (
+                {activeRules.map(rule => (
                   <div
                     key={rule.id}
                     className="flex items-start gap-2.5 py-1.5"

@@ -29,6 +29,7 @@ import {
   subtitleOutputExtensionFromCodec,
   type SubtitleOutputExtension,
 } from '../translation/subtitle-format';
+import { canonicalizeLanguage } from '../common/language.utils';
 import { SettingsService } from '../settings/settings.service';
 import { TokenUsageService } from '../settings/token-usage.service';
 import { ProfilesService } from '../profiles/profiles.service';
@@ -154,8 +155,8 @@ export class JobsService implements OnModuleInit {
         const settings = await this.settingsService.getSettings();
         const profiles = await this.profilesService.list();
         const eff = this.resolveProfileForPath(item.path, profiles, {
-          sourceLanguage: settings.sourceLanguage,
-          targetLanguage: settings.targetLanguage,
+          sourceLanguage: sourceLanguage || settings.sourceLanguage,
+          targetLanguage: targetLanguage || settings.targetLanguage,
           provider: dto.provider,
         });
         sourceLanguage = this.normalizeLanguage(eff.sourceLanguage);
@@ -670,12 +671,12 @@ export class JobsService implements OnModuleInit {
   }
 
   private normalizeLanguage(input: string): string {
-    const normalized = input.trim().toLowerCase();
-    if (normalized.length === 0) {
+    const trimmed = input.trim();
+    if (trimmed.length === 0) {
       throw new BadRequestException('Language must not be empty');
     }
 
-    return normalized;
+    return canonicalizeLanguage(trimmed);
   }
 
   private defaultPriority(dto: CreateJobDto): number {

@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Param, Post, Query, Logger } from '@nestjs/common';
+import { IsOptional, IsString } from 'class-validator';
 import { promises as fs } from 'node:fs';
 import { LibraryService } from './library.service';
 import { RulesService } from '../rules/rules.service';
@@ -6,6 +7,21 @@ import { LibraryQueryDto } from './dto/library-query.dto';
 import { OutputService } from '../output/output.service';
 import { ExtractionService } from '../extraction/extraction.service';
 import { PreviewSubtitleDto } from './dto/preview-subtitle.dto';
+import { canonicalizeLanguage } from '../common/language.utils';
+
+class LibraryItemQueryDto {
+  @IsOptional()
+  @IsString()
+  sourceLanguage?: string;
+
+  @IsOptional()
+  @IsString()
+  targetLanguage?: string;
+
+  @IsOptional()
+  @IsString()
+  targetConflictResolution?: string;
+}
 
 @Controller('library')
 export class LibraryController {
@@ -104,9 +120,22 @@ export class LibraryController {
   }
 
   @Get(':id')
-  async getById(@Param('id') id: string) {
+  async getById(@Param('id') id: string, @Query() query: LibraryItemQueryDto) {
     const item = await this.libraryService.getById(id);
-    const rules = await this.rulesService.evaluateAll(item);
+    const override: Record<string, string> = {};
+    if (query.sourceLanguage) {
+      override.sourceLanguage = canonicalizeLanguage(query.sourceLanguage);
+    }
+    if (query.targetLanguage) {
+      override.targetLanguage = canonicalizeLanguage(query.targetLanguage);
+    }
+    if (query.targetConflictResolution) {
+      override.targetConflictResolution = query.targetConflictResolution;
+    }
+    const rules = await this.rulesService.evaluateAll(
+      item,
+      Object.keys(override).length ? override : undefined,
+    );
     return {
       ...item,
       rules,

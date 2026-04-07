@@ -16,6 +16,7 @@ import {
   type MediaType,
   type SubtitleTrack,
 } from './media-item.entity';
+import { canonicalizeLanguage } from '../common/language.utils';
 
 interface CachedLibrary {
   expiresAt: number;
@@ -222,7 +223,7 @@ export class LibraryService implements OnModuleInit {
       .filter((stream) => stream.codec_type === 'subtitle')
       .map((stream) => ({
         index: stream.index ?? -1,
-        language: (stream.tags?.language ?? 'und').toLowerCase(),
+        language: canonicalizeLanguage(stream.tags?.language ?? 'und'),
         title: stream.tags?.title,
         codec: stream.codec_name ?? 'unknown',
       }));
@@ -331,7 +332,7 @@ export class LibraryService implements OnModuleInit {
 
         return {
           path: fullPath,
-          language: language.toLowerCase(),
+          language: canonicalizeLanguage(language),
           forced,
         };
       });
