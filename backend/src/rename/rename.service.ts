@@ -65,38 +65,50 @@ export class RenameService {
     const ext = path.extname(filename);
     const basename = path.basename(filename, ext);
     
-    let titleHint = this.extractTitleHintFromPath(dir, baseDir) || basename;
+    // Matchear formato de serie estilo Radarr/Sonarr
+    const showRegex = /^(.*?)(?:\s+-\s+)?\bS(\d{1,2})E(\d{1,2})\b(?:[-\sA-Z0-9]*E\d{1,2})?(?:\s*-\s*(.*?))?$/i;
+    const tvMatch = basename.match(showRegex);
     
-    titleHint = titleHint.replace(/season\s*\d+/i, '').trim();
-    if (!titleHint) {
-       titleHint = basename; 
-    }
-    titleHint = this.cleanReleaseName(titleHint);
+    // Extraer año de las películas
+    const yearMatch = basename.match(/\b(19|20)\d{2}\b/);
 
     const variations: RenameVariation[] = [];
 
-    const episodeMatch = basename.match(/s(\d{1,2})e(\d{1,2})/i);
-    const yearMatch = basename.match(/\b(19|20)\d{2}\b/);
+    if (tvMatch) {
+      const seriesTitleRaw = tvMatch[1]?.trim() || this.extractTitleHintFromPath(dir, baseDir) || basename;
+      const seriesTitle = this.cleanReleaseName(seriesTitleRaw) || seriesTitleRaw;
+      
+      const s = parseInt(tvMatch[2], 10).toString().padStart(2, '0');
+      const e = parseInt(tvMatch[3], 10).toString().padStart(2, '0');
+      
+      const episodeTitleRaw = tvMatch[4] || '';
+      const episodeTitle = this.cleanReleaseName(episodeTitleRaw);
+      
+      let newNameDash = `${seriesTitle} - S${s}E${e}`;
+      let newNameSpace = `${seriesTitle} S${s}E${e}`;
 
-    if (episodeMatch) {
-      const s = parseInt(episodeMatch[1], 10).toString().padStart(2, '0');
-      const e = parseInt(episodeMatch[2], 10).toString().padStart(2, '0');
+      if (episodeTitle) {
+        newNameDash += ` - ${episodeTitle}`;
+        newNameSpace += ` - ${episodeTitle}`;
+      }
+
       variations.push({
         id: 'series-dash',
-        label: '{Title} - S{season:00}E{episode:00}',
-        newPath: path.join(dir, `${titleHint} - S${s}E${e}${ext}`)
+        label: episodeTitle ? '{Title} - S{season:00}E{episode:00} - {EpisodeTitle}' : '{Title} - S{season:00}E{episode:00}',
+        newPath: path.join(dir, `${newNameDash}${ext}`)
       });
       variations.push({
         id: 'series-space',
-        label: '{Title} S{season:00}E{episode:00}',
-        newPath: path.join(dir, `${titleHint} S${s}E${e}${ext}`)
+        label: episodeTitle ? '{Title} S{season:00}E{episode:00} - {EpisodeTitle}' : '{Title} S{season:00}E{episode:00}',
+        newPath: path.join(dir, `${newNameSpace}${ext}`)
       });
+
     } else if (yearMatch) {
       const year = yearMatch[0];
-      let movieTitle = basename.substring(0, yearMatch.index).trim();
-      movieTitle = this.cleanReleaseName(movieTitle);
+      const movieTitleRaw = basename.substring(0, yearMatch.index).trim();
+      let movieTitle = this.cleanReleaseName(movieTitleRaw);
       
-      if (!movieTitle) movieTitle = titleHint;
+      if (!movieTitle) movieTitle = this.extractTitleHintFromPath(dir, baseDir) || basename;
 
       variations.push({
          id: 'movie-parens',
@@ -140,10 +152,35 @@ export class RenameService {
   }
 
   private cleanReleaseName(name: string): string {
-    let cleaned = name.replace(/[\._]/g, ' ');
-    cleaned = cleaned.replace(/(1080p|720p|2160p|4k|WEB-DL|WEBRip|BluRay|x264|H[.\s]?264|x265|HEVC)/i, '');
-    cleaned = cleaned.replace(/-\s*$/, '').trim();
-    return cleaned;
+    if (!name) return '';
+    let cleaned = name;
+
+    // 1. Puntos y guiones bajos a espacios
+    cleaned = cleaned.replace(/[\._]/g, ' ');
+
+    // 2. Metadatos entre corchetes
+    cleaned = cleaned.replace(/\[.*?\]/g, '');
+
+    // 3. Resolución, codec, calidades globales
+    const qualityTokens = [
+      '1080p', '720p', '2160p', '4k', '8k', '480p', '360p',
+      'WEB-DL', 'WEBRip', 'BluRay', 'BRRip', 'BDRip', 'HDRip', 'DVDRip', 'HDTV', 'PDTV',
+      'x264', 'h264', 'x265', 'h265', 'HEVC', 'AVC', '10bit', 'SDR', 'HDR', 'Remux',
+      'DD5\\.?1', 'DTS-HD', 'TrueHD', 'EAC3', 'AAC', 'AC3', 'FLAC',
+      'Dual', 'Multi', 'Latino', 'Castellano', 'Subbed', 'Dubbed'
+    ];
+    
+    const regex = new RegExp(`\\b(${qualityTokens.join('|')})\\b`, 'gi');
+    cleaned = cleaned.replace(regex, '');
+
+    // 4. Remover sufijo de grupo (ej: -FLUX)
+    cleaned = cleaned.replace(/-\s*[a-zA-Z0-9]+$/, '');
+
+    // 5. Espacios múltiples y guiones huérfanos
+    cleaned = cleaned.replace(/\s+/g, ' ');
+    cleaned = cleaned.replace(/^[-\s]+|[-\s]+$/g, '');
+
+    return cleaned.trim();
   }
 
   async executeRename(operations: { originalPath: string, newPath: string }[]): Promise<{ success: number; failed: number; errors: any[] }> {
