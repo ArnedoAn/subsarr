@@ -10,6 +10,7 @@ const navLinks = [
   { href: '/',        label: appStrings.nav.library,  icon: 'video_library' },
   { href: '/dashboard', label: appStrings.nav.dashboard, icon: 'dashboard' },
   { href: '/jobs',    label: appStrings.nav.jobs,     icon: 'work_history'  },
+  { href: '/rename',  label: appStrings.nav.rename,   icon: 'drive_file_rename_outline' },
   { href: '/archive', label: appStrings.nav.logs,     icon: 'terminal'      },
   { href: '/settings',label: appStrings.nav.settings, icon: 'settings'      },
 ];

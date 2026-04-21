@@ -7,6 +7,7 @@ export const appStrings = {
     dashboard: 'Panel',
     jobs: 'Trabajos',
     logs: 'Registros',
+    rename: 'Renombrar',
     settings: 'Ajustes',
   },
 } as const;

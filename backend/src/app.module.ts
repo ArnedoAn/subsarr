@@ -18,6 +18,7 @@ import { StatsModule } from './stats/stats.module';
 import { ProfilesModule } from './profiles/profiles.module';
 import { GlossaryModule } from './glossary/glossary.module';
 import { IntegrationsModule } from './integrations/integrations.module';
+import { RenameModule } from './rename/rename.module';
 
 @Module({
   imports: [
@@ -61,6 +62,7 @@ import { IntegrationsModule } from './integrations/integrations.module';
     ProfilesModule,
     GlossaryModule,
     IntegrationsModule,
+    RenameModule,
   ],
   controllers: [AppController],
   providers: [AppService],
