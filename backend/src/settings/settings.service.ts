@@ -144,8 +144,7 @@ export class SettingsService {
         input.deepSeekApiKey && input.deepSeekApiKey.trim().length > 0
           ? input.deepSeekApiKey.trim()
           : current.deepSeekApiKey,
-      openRouterModel:
-        input.openRouterModel?.trim() || current.openRouterModel,
+      openRouterModel: input.openRouterModel?.trim() || current.openRouterModel,
       deepSeekModel: input.deepSeekModel?.trim() || current.deepSeekModel,
       mediaDirs: input.mediaDirs
         .map((entry) => entry.trim())
@@ -157,16 +156,14 @@ export class SettingsService {
       rules: input.rules,
       autoScanEnabled: input.autoScanEnabled ?? current.autoScanEnabled,
       autoScanCronExpression:
-        input.autoScanCronExpression?.trim() ||
-        current.autoScanCronExpression,
+        input.autoScanCronExpression?.trim() || current.autoScanCronExpression,
       autoTranslateNewItems:
         input.autoTranslateNewItems ?? current.autoTranslateNewItems,
       telegramBotToken:
         input.telegramBotToken && input.telegramBotToken.trim().length > 0
           ? input.telegramBotToken.trim()
           : current.telegramBotToken,
-      telegramChatId:
-        input.telegramChatId?.trim() || current.telegramChatId,
+      telegramChatId: input.telegramChatId?.trim() || current.telegramChatId,
       telegramEnabled: input.telegramEnabled ?? current.telegramEnabled,
       telegramEvents: input.telegramEvents ?? current.telegramEvents,
       dailyTokenLimitFree:

@@ -98,24 +98,21 @@ export class LegacyImportService implements OnModuleInit {
         targetLanguage: (
           parsed.targetLanguage ?? config.targetLanguage
         ).toLowerCase(),
-        openRouterApiKey:
-          parsed.openRouterApiKey ?? config.openRouterApiKey,
+        openRouterApiKey: parsed.openRouterApiKey ?? config.openRouterApiKey,
         deepSeekApiKey: parsed.deepSeekApiKey ?? config.deepSeekApiKey,
         scanCacheTtlMinutes:
           parsed.scanCacheTtlMinutes ?? config.scanCacheTtlMinutes,
         concurrency: parsed.concurrency ?? config.concurrency,
         pathContainsExclusions:
           parsed.pathContainsExclusions ?? config.pathExclusions,
-        fileTooLargeBytes:
-          parsed.fileTooLargeBytes ?? config.fileTooLargeBytes,
+        fileTooLargeBytes: parsed.fileTooLargeBytes ?? config.fileTooLargeBytes,
         translationVerificationEnabled:
           parsed.translationVerificationEnabled ?? false,
         rules: parsed.rules ?? DEFAULT_RULES,
         openRouterModel: parsed.openRouterModel ?? 'openrouter/free',
         deepSeekModel: parsed.deepSeekModel ?? 'deepseek-chat',
         autoScanEnabled: parsed.autoScanEnabled ?? false,
-        autoScanCronExpression:
-          parsed.autoScanCronExpression ?? '0 */6 * * *',
+        autoScanCronExpression: parsed.autoScanCronExpression ?? '0 */6 * * *',
         autoTranslateNewItems: parsed.autoTranslateNewItems ?? false,
         telegramBotToken: parsed.telegramBotToken,
         telegramChatId: parsed.telegramChatId,
@@ -195,7 +192,9 @@ export class LegacyImportService implements OnModuleInit {
     }
   }
 
-  private async importArchiveFromJsonlIfPresent(dataDir: string): Promise<void> {
+  private async importArchiveFromJsonlIfPresent(
+    dataDir: string,
+  ): Promise<void> {
     const p = path.join(dataDir, ARCHIVE_FILE);
     let raw: string;
     try {

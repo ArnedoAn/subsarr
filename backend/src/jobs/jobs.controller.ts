@@ -61,10 +61,7 @@ export class JobsController {
   }
 
   @Patch(':id/priority')
-  async setPriority(
-    @Param('id') id: string,
-    @Body() body: SetJobPriorityDto,
-  ) {
+  async setPriority(@Param('id') id: string, @Body() body: SetJobPriorityDto) {
     return this.jobsService.setJobPriority(id, body.priority);
   }
 

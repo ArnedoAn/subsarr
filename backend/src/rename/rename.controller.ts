@@ -1,4 +1,11 @@
-import { Controller, Get, Post, Query, Body, BadRequestException } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Query,
+  Body,
+  BadRequestException,
+} from '@nestjs/common';
 import { ExecuteRenameDto } from './dto/rename.dto';
 import { RenameService } from './rename.service';
 
@@ -9,7 +16,9 @@ export class RenameController {
   @Get('preview')
   async getPreview(@Query('dir') dir: string) {
     if (!dir) {
-      throw new BadRequestException('Directory path is required (dir query param)');
+      throw new BadRequestException(
+        'Directory path is required (dir query param)',
+      );
     }
     return this.renameService.getPreview(dir);
   }

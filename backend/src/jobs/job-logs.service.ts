@@ -130,10 +130,9 @@ export class JobLogsService {
     }
     if (query.search) {
       const s = `%${query.search.toLowerCase()}%`;
-      qb.andWhere(
-        '(LOWER(l.message) LIKE :s OR LOWER(l.phase) LIKE :s)',
-        { s },
-      );
+      qb.andWhere('(LOWER(l.message) LIKE :s OR LOWER(l.phase) LIKE :s)', {
+        s,
+      });
     }
     if (query.cursor) {
       qb.andWhere('l.timestamp < :cursor', { cursor: query.cursor });
@@ -150,7 +149,9 @@ export class JobLogsService {
       .map(rowToEntry);
   }
 
-  async queryCount(query: Omit<LogsQuery, 'cursor' | 'limit'>): Promise<number> {
+  async queryCount(
+    query: Omit<LogsQuery, 'cursor' | 'limit'>,
+  ): Promise<number> {
     const from = query.from ? Date.parse(query.from) : Number.NEGATIVE_INFINITY;
     const to = query.to ? Date.parse(query.to) : Number.POSITIVE_INFINITY;
 
@@ -164,10 +165,9 @@ export class JobLogsService {
     }
     if (query.search) {
       const s = `%${query.search.toLowerCase()}%`;
-      qb.andWhere(
-        '(LOWER(l.message) LIKE :s OR LOWER(l.phase) LIKE :s)',
-        { s },
-      );
+      qb.andWhere('(LOWER(l.message) LIKE :s OR LOWER(l.phase) LIKE :s)', {
+        s,
+      });
     }
 
     const rows = await qb.getMany();

@@ -118,14 +118,12 @@ export class SettingsController {
 
   @Post('import')
   @UseInterceptors(FileInterceptor('file'))
-  async importBundle(
-    @UploadedFile() file: { buffer: Buffer } | undefined,
-  ) {
+  async importBundle(@UploadedFile() file: { buffer: Buffer } | undefined) {
     if (!file?.buffer?.length) {
       throw new BadRequestException('ZIP file required');
     }
     const zip = new AdmZip(file.buffer);
-    let restored: string[] = [];
+    const restored: string[] = [];
     for (const e of zip.getEntries()) {
       if (e.isDirectory) {
         continue;

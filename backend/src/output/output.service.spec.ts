@@ -1,11 +1,26 @@
+import { ConfigService } from '@nestjs/config';
 import { OutputService } from './output.service';
 
 const normalizeSeparators = (value: string): string =>
   value.replaceAll('\\', '/');
 
 describe('OutputService', () => {
+  let service: OutputService;
+  let configService: ConfigService;
+
+  beforeEach(() => {
+    configService = {
+      get: Object.assign(jest.fn(), {
+        get: jest.fn().mockImplementation((key: string) => {
+          if (key === 'subsync.forceVtt') return false;
+          return null;
+        }),
+      }),
+    } as unknown as ConfigService;
+    service = new OutputService(configService);
+  });
+
   it('builds jellyfin compatible subtitle path', () => {
-    const service = new OutputService();
     const result = service.buildSubtitlePath(
       '/media/Breaking.Bad.S01E01.mkv',
       'es',
@@ -16,7 +31,6 @@ describe('OutputService', () => {
   });
 
   it('supports forced subtitle naming', () => {
-    const service = new OutputService();
     const result = service.buildSubtitlePath(
       '/media/The.Matrix.1999.mkv',
       'es',
@@ -28,7 +42,6 @@ describe('OutputService', () => {
   });
 
   it('builds ASS path when extension is ass', () => {
-    const service = new OutputService();
     const result = service.buildSubtitlePath(
       '/media/Show.S01E01.mkv',
       'spa',
@@ -39,7 +52,6 @@ describe('OutputService', () => {
   });
 
   it('builds forced ASS path', () => {
-    const service = new OutputService();
     const result = service.buildSubtitlePath(
       '/media/Show.S01E01.mkv',
       'spa',
@@ -52,7 +64,6 @@ describe('OutputService', () => {
   });
 
   it('builds alternate second-slot path', () => {
-    const service = new OutputService();
     const result = service.buildSubtitlePath(
       '/media/Show.S01E01.mkv',
       'spa',

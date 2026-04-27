@@ -140,8 +140,7 @@ export class TranslationService {
       }
       const { free, paid } = usageByTier;
       const promptTokensAcc = free.promptTokens + paid.promptTokens;
-      const completionTokensAcc =
-        free.completionTokens + paid.completionTokens;
+      const completionTokensAcc = free.completionTokens + paid.completionTokens;
       return Promise.resolve(
         options.onTokenUpdate({
           promptTokens: promptTokensAcc,

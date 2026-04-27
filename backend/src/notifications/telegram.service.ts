@@ -49,7 +49,12 @@ export class TelegramService {
     startedAtMs: number,
   ): Promise<void> {
     const { enabled, token, chatId, events } = await this.loadTelegramConfig();
-    if (!enabled || !token || !chatId || !this.wantsEvent(events, 'job.completed')) {
+    if (
+      !enabled ||
+      !token ||
+      !chatId ||
+      !this.wantsEvent(events, 'job.completed')
+    ) {
       return;
     }
     const base = path.basename(data.mediaItemPath ?? data.mediaItemId);
@@ -72,12 +77,16 @@ export class TelegramService {
     reason: string,
   ): Promise<void> {
     const { enabled, token, chatId, events } = await this.loadTelegramConfig();
-    if (!enabled || !token || !chatId || !this.wantsEvent(events, 'job.failed')) {
+    if (
+      !enabled ||
+      !token ||
+      !chatId ||
+      !this.wantsEvent(events, 'job.failed')
+    ) {
       return;
     }
     const base = path.basename(data.mediaItemPath ?? data.mediaItemId);
-    const short =
-      reason.length > 500 ? `${reason.slice(0, 497)}...` : reason;
+    const short = reason.length > 500 ? `${reason.slice(0, 497)}...` : reason;
     const text = [
       '❌ Subsarr — job fallido',
       `ID: ${jobId}`,
@@ -94,7 +103,12 @@ export class TelegramService {
     seconds: string;
   }): Promise<void> {
     const { enabled, token, chatId, events } = await this.loadTelegramConfig();
-    if (!enabled || !token || !chatId || !this.wantsEvent(events, 'scan.completed')) {
+    if (
+      !enabled ||
+      !token ||
+      !chatId ||
+      !this.wantsEvent(events, 'scan.completed')
+    ) {
       return;
     }
     const text = [
@@ -108,7 +122,12 @@ export class TelegramService {
 
   async notifyQuotaWarning(message: string): Promise<void> {
     const { enabled, token, chatId, events } = await this.loadTelegramConfig();
-    if (!enabled || !token || !chatId || !this.wantsEvent(events, 'quota.warning')) {
+    if (
+      !enabled ||
+      !token ||
+      !chatId ||
+      !this.wantsEvent(events, 'quota.warning')
+    ) {
       return;
     }
     void this.fireAndForget(() =>
@@ -118,7 +137,12 @@ export class TelegramService {
 
   async notifyQuotaReached(message: string): Promise<void> {
     const { enabled, token, chatId, events } = await this.loadTelegramConfig();
-    if (!enabled || !token || !chatId || !this.wantsEvent(events, 'quota.reached')) {
+    if (
+      !enabled ||
+      !token ||
+      !chatId ||
+      !this.wantsEvent(events, 'quota.reached')
+    ) {
       return;
     }
     void this.fireAndForget(() =>
@@ -164,10 +188,9 @@ export class TelegramService {
     }
     const token = s.telegramBotToken;
     try {
-      const botRes = await fetch(
-        `https://api.telegram.org/bot${token}/getMe`,
-        { signal: AbortSignal.timeout(12_000) },
-      );
+      const botRes = await fetch(`https://api.telegram.org/bot${token}/getMe`, {
+        signal: AbortSignal.timeout(12_000),
+      });
       const botJson = (await botRes.json()) as {
         ok?: boolean;
         result?: { username?: string };
@@ -187,18 +210,17 @@ export class TelegramService {
       }
 
       return {
-        ok: botOk && (!!s.telegramChatId ? chatOk : false),
+        ok: botOk && (s.telegramChatId ? chatOk : false),
         botOk,
         chatOk: !!s.telegramChatId && chatOk,
         botUsername,
-        error:
-          !botOk
-            ? botJson.description ?? 'getMe failed'
-            : !s.telegramChatId
-              ? 'Chat ID not set'
-              : !chatOk
-                ? 'Chat not reachable for this bot'
-                : undefined,
+        error: !botOk
+          ? (botJson.description ?? 'getMe failed')
+          : !s.telegramChatId
+            ? 'Chat ID not set'
+            : !chatOk
+              ? 'Chat not reachable for this bot'
+              : undefined,
       };
     } catch (e) {
       return {
@@ -212,7 +234,9 @@ export class TelegramService {
 
   private fireAndForget(fn: () => Promise<void>): void {
     void fn().catch((err) =>
-      this.logger.warn(`Telegram send failed: ${err instanceof Error ? err.message : err}`),
+      this.logger.warn(
+        `Telegram send failed: ${err instanceof Error ? err.message : err}`,
+      ),
     );
   }
 

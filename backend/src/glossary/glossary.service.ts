@@ -23,7 +23,9 @@ export class GlossaryService {
     try {
       const raw = await fs.readFile(this.filePath(), 'utf8');
       const parsed = JSON.parse(raw) as GlossaryFile;
-      return Array.isArray(parsed.entries) ? parsed.entries.slice(0, MAX_ENTRIES) : [];
+      return Array.isArray(parsed.entries)
+        ? parsed.entries.slice(0, MAX_ENTRIES)
+        : [];
     } catch {
       return [];
     }

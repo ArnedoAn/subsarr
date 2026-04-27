@@ -64,7 +64,10 @@ export class TokenUsageService {
     return estimateDeepSeekCostUsd(prompt, completion);
   }
 
-  async addUsage(tier: TranslationTier, usage: TranslationUsage): Promise<void> {
+  async addUsage(
+    tier: TranslationTier,
+    usage: TranslationUsage,
+  ): Promise<void> {
     const date = this.todayUtc();
     try {
       let row = await this.usageRepo.findOne({ where: { tier, date } });

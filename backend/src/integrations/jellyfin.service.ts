@@ -29,7 +29,9 @@ export class JellyfinService {
       });
       if (!res.ok) {
         const t = await res.text();
-        this.logger.warn(`Jellyfin refresh failed: HTTP ${res.status} ${t.slice(0, 200)}`);
+        this.logger.warn(
+          `Jellyfin refresh failed: HTTP ${res.status} ${t.slice(0, 200)}`,
+        );
       }
     } catch (e) {
       this.logger.warn(

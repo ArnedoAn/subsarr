@@ -60,8 +60,11 @@ export class JobsService implements OnModuleInit {
     this.translationQueue.on('stalled', (job) => {
       void (async () => {
         const jobId = String(job.id);
-        const reason = 'Job cancelado: el servidor se reinició mientras estaba en proceso';
-        this.logger.warn(`Stalled job detected [${jobId}], cancelling instead of retrying`);
+        const reason =
+          'Job cancelado: el servidor se reinició mientras estaba en proceso';
+        this.logger.warn(
+          `Stalled job detected [${jobId}], cancelling instead of retrying`,
+        );
         try {
           await this.jobLogsService.append({
             jobId,
@@ -72,7 +75,7 @@ export class JobsService implements OnModuleInit {
           await this.jobArchiveService.appendSnapshot({
             id: jobId,
             state: 'failed',
-            data: job.data as TranslationJobPayload,
+            data: job.data,
             createdAt: job.timestamp,
             processedAt: job.processedOn ?? undefined,
             finishedAt: Date.now(),
@@ -91,9 +94,7 @@ export class JobsService implements OnModuleInit {
     });
   }
 
-  async enqueue(
-    dto: CreateJobDto,
-  ): Promise<
+  async enqueue(dto: CreateJobDto): Promise<
     | { id: string | number; state: string }
     | {
         batchGroupId: string;
@@ -739,8 +740,7 @@ export class JobsService implements OnModuleInit {
       throw new BadRequestException('Daily paid-tier token limit reached');
     }
     if (settings.monthlyBudgetUsd != null) {
-      const spent =
-        await this.tokenUsageService.getMonthPaidCostEstimateUsd();
+      const spent = await this.tokenUsageService.getMonthPaidCostEstimateUsd();
       if (spent >= settings.monthlyBudgetUsd) {
         throw new BadRequestException('Monthly DeepSeek budget limit reached');
       }

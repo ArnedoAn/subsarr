@@ -99,7 +99,8 @@ export class TranslationJobProcessor {
       const up = info.usageByTier.paid;
       const df = {
         promptTokens: uf.promptTokens - lastPersistedFree.promptTokens,
-        completionTokens: uf.completionTokens - lastPersistedFree.completionTokens,
+        completionTokens:
+          uf.completionTokens - lastPersistedFree.completionTokens,
         totalTokens: uf.totalTokens - lastPersistedFree.totalTokens,
       };
       if (df.promptTokens !== 0 || df.completionTokens !== 0) {
@@ -108,7 +109,8 @@ export class TranslationJobProcessor {
       }
       const dp = {
         promptTokens: up.promptTokens - lastPersistedPaid.promptTokens,
-        completionTokens: up.completionTokens - lastPersistedPaid.completionTokens,
+        completionTokens:
+          up.completionTokens - lastPersistedPaid.completionTokens,
         totalTokens: up.totalTokens - lastPersistedPaid.totalTokens,
       };
       if (dp.promptTokens !== 0 || dp.completionTokens !== 0) {
@@ -220,10 +222,7 @@ export class TranslationJobProcessor {
           effectiveExtension,
           pathVariant,
         );
-        await this.outputService.snapshotExistingIfAny(
-          existingPath,
-          item.id,
-        );
+        await this.outputService.snapshotExistingIfAny(existingPath, item.id);
         await fs.unlink(existingPath).catch(() => undefined);
       }
 
@@ -256,7 +255,12 @@ export class TranslationJobProcessor {
             verificationEnabled: settings.translationVerificationEnabled,
             onVerificationPhase: async (info) => {
               const progressPercent = info.phase === 'validating' ? 91 : 93;
-              await publish(info.phase, progressPercent, info.message, info.details);
+              await publish(
+                info.phase,
+                progressPercent,
+                info.message,
+                info.details,
+              );
             },
             onVerificationSummary: async (info) => {
               await publish(
@@ -429,7 +433,12 @@ export class TranslationJobProcessor {
           verificationEnabled: settings.translationVerificationEnabled,
           onVerificationPhase: async (info) => {
             const progressPercent = info.phase === 'validating' ? 91 : 93;
-            await publish(info.phase, progressPercent, info.message, info.details);
+            await publish(
+              info.phase,
+              progressPercent,
+              info.message,
+              info.details,
+            );
           },
           onVerificationSummary: async (info) => {
             await publish(
