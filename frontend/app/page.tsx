@@ -4,7 +4,11 @@ import Link from 'next/link';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { apiGet, apiPost } from '@/lib/api';
 import { readLibraryFiltersCache, writeLibraryFiltersCache } from '@/lib/library-filters-cache';
-import { type MediaItemWithRuleStatus, type SettingsPayload } from '@/lib/types';
+import {
+  type LibraryScanStatus,
+  type MediaItemWithRuleStatus,
+  type SettingsPayload,
+} from '@/lib/types';
 import { COMMON_LANGUAGES } from '@/lib/languages';
 import { BatchQueueModal } from '@/components/batch-queue-modal';
 import { Badge } from '@/components/ui/badge';
@@ -23,6 +27,7 @@ export default function LibraryPage() {
   const [selected, setSelected]   = useState<Record<string, boolean>>({});
   const [loading, setLoading]     = useState(true);
   const [rescanning, setRescanning] = useState(false);
+  const [scanStatus, setScanStatus] = useState<LibraryScanStatus | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(true);
   const [batchModalOpen, setBatchModalOpen] = useState(false);
   const [batchModalItems, setBatchModalItems] = useState<MediaItemWithRuleStatus[]>([]);
@@ -131,17 +136,47 @@ export default function LibraryPage() {
   const rescan = useCallback(async () => {
     setRescanning(true);
     try {
-      const res = await apiPost<MediaItemWithRuleStatus[]>('/library/rescan');
-      setItems(res);
-      success('Library rescanned successfully');
+      const res = await apiPost<{
+        accepted: boolean;
+        state: 'queued' | 'running';
+        scan: LibraryScanStatus;
+      }>('/library/rescan');
+      setScanStatus(res.scan);
+      success(
+        res.accepted
+          ? 'Library rescan started'
+          : 'Library scan is already running',
+      );
+
+      for (let attempt = 0; attempt < 120; attempt += 1) {
+        const status = await apiGet<LibraryScanStatus>('/library/scan-status');
+        setScanStatus(status);
+        if (status.state === 'completed') {
+          await load();
+          return;
+        }
+        if (status.state === 'failed') {
+          throw new Error(status.lastError ?? 'Rescan failed');
+        }
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+
+      throw new Error('Rescan timed out while waiting for completion');
     } catch (err) {
       toastError(err instanceof Error ? err.message : 'Rescan failed');
     } finally {
       setRescanning(false);
     }
-  }, [success, toastError]);
+  }, [load, success, toastError]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+    void apiGet<LibraryScanStatus>('/library/scan-status')
+      .then((status) => {
+        setScanStatus(status);
+      })
+      .catch(() => undefined);
+  }, [load]);
 
   const filtered = useMemo(() => {
     return items
@@ -246,11 +281,13 @@ export default function LibraryPage() {
           <Button
             variant="secondary"
             size="sm"
-            loading={rescanning}
-            iconLeft={rescanning ? undefined : 'refresh'}
+            loading={rescanning || scanStatus?.state === 'running'}
+            iconLeft={
+              rescanning || scanStatus?.state === 'running' ? undefined : 'refresh'
+            }
             onClick={() => void rescan()}
           >
-            {rescanning ? 'Scanning…' : 'Rescan'}
+            {rescanning || scanStatus?.state === 'running' ? 'Scanning…' : 'Rescan'}
           </Button>
         </div>
       </div>

@@ -17,6 +17,7 @@ export interface SubsyncEnvConfig {
   databasePath: string;
   pathExclusions: string[];
   fileTooLargeBytes?: number;
+  probeConcurrency: number;
 }
 
 const parseNumber = (input: string | undefined, fallback: number): number => {
@@ -86,6 +87,10 @@ export const subsyncConfig = registerAs('subsync', (): SubsyncEnvConfig => {
       .filter((entry) => entry.length > 0),
     fileTooLargeBytes: parseOptionalBytes(
       process.env.SUBSYNC_FILE_TOO_LARGE_BYTES,
+    ),
+    probeConcurrency: Math.max(
+      1,
+      parseNumber(process.env.SUBSYNC_PROBE_CONCURRENCY, 10),
     ),
   };
 });

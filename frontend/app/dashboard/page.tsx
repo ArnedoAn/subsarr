@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { apiGet } from '@/lib/api';
+import { type LibraryScanStatus } from '@/lib/types';
 import {
   Bar,
   BarChart,
@@ -23,7 +24,8 @@ type TierBlock = {
 };
 
 export type DashboardStats = {
-  libraryItemCount: number;
+  libraryItemCount: number | null;
+  libraryScan: LibraryScanStatus;
   jobsByState: Record<string, number>;
   jobsSummary: {
     today: { completed: number; failed: number; cancelled: number; total: number };
@@ -162,8 +164,12 @@ export default function DashboardPage() {
       <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Kpi
           title="Biblioteca"
-          value={String(data.libraryItemCount)}
-          subtitle="items indexados"
+          value={data.libraryItemCount == null ? 'N/A' : String(data.libraryItemCount)}
+          subtitle={
+            data.libraryScan.state === 'running'
+              ? 'escaneo en progreso'
+              : 'items indexados'
+          }
         />
         <Kpi
           title="Jobs hoy"

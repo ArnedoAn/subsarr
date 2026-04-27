@@ -1,4 +1,12 @@
-import { Body, Controller, Get, Param, Post, Query, Logger } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Query,
+  Logger,
+} from '@nestjs/common';
 import { IsOptional, IsString } from 'class-validator';
 import { promises as fs } from 'node:fs';
 import { LibraryService } from './library.service';
@@ -119,6 +127,11 @@ export class LibraryController {
     return { versions: files };
   }
 
+  @Get('scan-status')
+  getScanStatus() {
+    return this.libraryService.getScanStatus();
+  }
+
   @Get(':id')
   async getById(@Param('id') id: string, @Query() query: LibraryItemQueryDto) {
     const item = await this.libraryService.getById(id);
@@ -143,16 +156,13 @@ export class LibraryController {
   }
 
   @Post('rescan')
-  async rescan() {
-    this.logger.log('POST /library/rescan called - forcing full rescan');
-    try {
-      const items = await this.libraryService.rescan();
-      this.logger.log(`Rescan completed. Found ${items.length} items`);
-      return this.attachRuleStatus(items);
-    } catch (err) {
-      this.logger.error(`Rescan failed: ${err}`);
-      throw err;
-    }
+  rescan() {
+    const result = this.libraryService.requestRescan();
+    return {
+      accepted: result.accepted,
+      state: result.state,
+      scan: this.libraryService.getScanStatus(),
+    };
   }
 
   private async attachRuleStatus(

@@ -92,6 +92,17 @@ export interface SettingsPayload {
   jellyfinApiKeyMasked: string;
 }
 
+export interface LibraryScanStatus {
+  state: 'idle' | 'running' | 'completed' | 'failed';
+  trigger: 'startup' | 'request' | 'cache-refresh' | 'manual' | null;
+  startedAt: number | null;
+  finishedAt: number | null;
+  lastSuccessAt: number | null;
+  lastError: string | null;
+  lastDurationMs: number | null;
+  lastItemCount: number | null;
+}
+
 export interface JobResult {
   id: string | number;
   data: {

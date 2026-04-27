@@ -693,7 +693,23 @@ export default function SettingsPage() {
       <div className="flex items-center justify-between pt-4 border-t border-outline-variant/15">
         <div className="flex gap-3">
           <button
-            onClick={() => void apiPost('/library/rescan').then(load)}
+            onClick={() =>
+              void apiPost<{ accepted: boolean }>('/library/rescan')
+                .then((res) => {
+                  if (res.accepted) {
+                    success('Library rescan started');
+                  } else {
+                    success('Library scan is already running');
+                  }
+                })
+                .catch((err) => {
+                  toastError(
+                    err instanceof Error
+                      ? err.message
+                      : 'Failed to start library rescan',
+                  );
+                })
+            }
             className="text-xs text-on-surface-variant hover:text-on-surface transition-colors flex items-center gap-1.5"
           >
             <span className="material-symbols-outlined text-[16px]">refresh</span>

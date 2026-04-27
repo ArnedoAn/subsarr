@@ -76,7 +76,11 @@ export class StatsService {
     >();
     const endDay = new Date();
     const startDay = new Date(thirtyDaysAgo);
-    for (let d = new Date(startDay); d <= endDay; d.setUTCDate(d.getUTCDate() + 1)) {
+    for (
+      let d = new Date(startDay);
+      d <= endDay;
+      d.setUTCDate(d.getUTCDate() + 1)
+    ) {
       dayMap.set(d.toISOString().slice(0, 10), {
         completed: 0,
         failed: 0,
@@ -101,17 +105,21 @@ export class StatsService {
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([date, v]) => ({ date, ...v }));
 
-    const [tokenSummary, tokensByDay, queueHealth, library] = await Promise.all([
-      this.tokenUsageService.getSummary(),
-      this.tokenUsageService.getDailyTokenSeries(30),
-      this.jobsService.getQueueHealth(),
-      this.libraryService.getLibrary(false).catch(() => [] as { id: string }[]),
-    ]);
+    const [tokenSummary, tokensByDay, queueHealth, library] = await Promise.all(
+      [
+        this.tokenUsageService.getSummary(),
+        this.tokenUsageService.getDailyTokenSeries(30),
+        this.jobsService.getQueueHealth(),
+        Promise.resolve(this.libraryService.getCachedItemCount()),
+      ],
+    );
+    const scanStatus = this.libraryService.getScanStatus();
 
     const mem = process.memoryUsage();
 
     return {
-      libraryItemCount: library.length,
+      libraryItemCount: library,
+      libraryScan: scanStatus,
       jobsByState,
       jobsSummary: {
         today: countStates(todaySnaps),

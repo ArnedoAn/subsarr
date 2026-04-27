@@ -12,6 +12,8 @@ async function sleep(ms: number): Promise<void> {
 function isRetryableError(error: Error): boolean {
   const message = error.message?.toLowerCase() ?? "";
   return message.includes("econnrefused") || 
+         message.includes("econnreset") ||
+         message.includes("socket hang up") ||
          message.includes("network") || 
          message.includes("failed to fetch") ||
          message.includes("timeout");
