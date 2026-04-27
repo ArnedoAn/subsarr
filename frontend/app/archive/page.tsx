@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Toggle } from '@/components/ui/toggle';
+import { MobilePageHeader } from '@/components/mobile/page-header';
 
 type LogLevel = 'info' | 'warn' | 'error';
 
@@ -38,6 +39,7 @@ export default function LogsPage() {
   const [to, setTo]               = useState('');
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [loading, setLoading]     = useState(true);
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [expanded, setExpanded]   = useState<Record<string, boolean>>({});
 
@@ -96,8 +98,24 @@ export default function LogsPage() {
 
   return (
     <section className="space-y-6">
-      {/* Header */}
-      <div>
+      <MobilePageHeader
+        title="Logs"
+        subtitle="System event history and diagnostics"
+        actions={
+          <button
+            type="button"
+            onClick={() => setMobileFiltersOpen(v => !v)}
+            className="btn btn-ghost btn-icon"
+            aria-label="Toggle filters"
+          >
+            <span className="material-symbols-outlined text-[18px]">
+              {mobileFiltersOpen ? 'expand_less' : 'filter_list'}
+            </span>
+          </button>
+        }
+      />
+
+      <div className="hidden md:block">
         <h1 className="text-2xl font-bold text-on-surface tracking-tight">Logs</h1>
         <p className="text-sm text-on-surface-variant mt-0.5">
           System event history and diagnostics
@@ -107,8 +125,72 @@ export default function LogsPage() {
         </p>
       </div>
 
-      {/* Filters */}
-      <div className="bg-surface-container rounded-lg p-4 space-y-3">
+      <div className="md:hidden bg-surface-container rounded-lg overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setMobileFiltersOpen(v => !v)}
+          className="w-full flex items-center justify-between px-3 py-2 text-sm font-medium text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-colors"
+        >
+          <span className="flex items-center gap-2">
+            <span className="material-symbols-outlined text-[16px]">filter_list</span>
+            Filters
+          </span>
+          <span className="material-symbols-outlined text-[16px]">
+            {mobileFiltersOpen ? 'expand_less' : 'expand_more'}
+          </span>
+        </button>
+        {mobileFiltersOpen && (
+          <div className="p-3 border-t border-outline-variant/15 space-y-2">
+            <div className="grid grid-cols-1 gap-2">
+              <div className="relative">
+                <select
+                  value={level}
+                  onChange={e => setLevel(e.target.value as '' | LogLevel)}
+                  className="w-full engraved-input text-sm px-3 py-2 pr-8 appearance-none cursor-pointer"
+                >
+                  <option value="">All levels</option>
+                  <option value="info">INFO</option>
+                  <option value="warn">WARN</option>
+                  <option value="error">ERROR</option>
+                </select>
+                <span className="material-symbols-outlined absolute right-2.5 top-1/2 -translate-y-1/2 text-[16px] text-on-surface-variant pointer-events-none">expand_more</span>
+              </div>
+              <input
+                value={jobId}
+                onChange={e => setJobId(e.target.value)}
+                placeholder="Job ID…"
+                className="engraved-input text-sm px-3 py-2"
+              />
+              <input
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="Search messages…"
+                className="engraved-input text-sm px-3 py-2"
+              />
+              <input
+                type="datetime-local"
+                value={from}
+                onChange={e => setFrom(e.target.value)}
+                className="engraved-input text-sm px-3 py-2"
+              />
+              <input
+                type="datetime-local"
+                value={to}
+                onChange={e => setTo(e.target.value)}
+                className="engraved-input text-sm px-3 py-2"
+              />
+              <div className="flex items-center justify-between gap-2">
+                <Toggle checked={autoRefresh} onChange={setAutoRefresh} label="Auto-refresh" />
+                <Button variant="secondary" size="sm" onClick={() => void load()} iconLeft="refresh">
+                  Apply
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="hidden md:block bg-surface-container rounded-lg p-4 space-y-3">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-2">
           {/* Level */}
           <div className="relative">

@@ -11,6 +11,9 @@ import {
 } from '@/lib/types';
 import { COMMON_LANGUAGES } from '@/lib/languages';
 import { BatchQueueModal } from '@/components/batch-queue-modal';
+import { FilterChip } from '@/components/mobile/filter-chip';
+import { MobilePageHeader } from '@/components/mobile/page-header';
+import { MobileStickyActionBar } from '@/components/mobile/sticky-action-bar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -29,6 +32,7 @@ export default function LibraryPage() {
   const [rescanning, setRescanning] = useState(false);
   const [scanStatus, setScanStatus] = useState<LibraryScanStatus | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(true);
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [batchModalOpen, setBatchModalOpen] = useState(false);
   const [batchModalItems, setBatchModalItems] = useState<MediaItemWithRuleStatus[]>([]);
 
@@ -234,7 +238,7 @@ export default function LibraryPage() {
         return;
       }
     }
-    toastError('Selecciona archivos en la tabla o elige una carpeta en los filtros.');
+    toastError('Select files in the list or choose a folder in filters.');
   };
 
   const toggleSelection = (id: string) => setSelected(prev => ({ ...prev, [id]: !prev[id] }));
@@ -262,9 +266,35 @@ export default function LibraryPage() {
   ].filter(Boolean).length;
 
   return (
-    <section className="space-y-6">
-      {/* Page Header */}
-      <div className="flex items-start justify-between gap-4">
+    <section className="space-y-5 md:space-y-6">
+      <MobilePageHeader
+        title="Library"
+        subtitle="Media files and subtitle status"
+        actions={
+          <>
+            <button
+              onClick={() => openBatchModal()}
+              className="btn btn-ghost btn-icon"
+              aria-label="Queue batch"
+              title="Queue batch"
+            >
+              <span className="material-symbols-outlined text-[18px]">playlist_add</span>
+            </button>
+            <button
+              onClick={() => void rescan()}
+              className="btn btn-ghost btn-icon"
+              aria-label="Rescan library"
+              title="Rescan library"
+            >
+              <span className="material-symbols-outlined text-[18px]">
+                {rescanning || scanStatus?.state === 'running' ? 'progress_activity' : 'refresh'}
+              </span>
+            </button>
+          </>
+        }
+      />
+
+      <div className="hidden md:flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-on-surface tracking-tight">Library</h1>
           <p className="text-sm text-on-surface-variant mt-0.5">Media files and subtitle status</p>
@@ -276,15 +306,13 @@ export default function LibraryPage() {
             iconLeft="playlist_add"
             onClick={() => openBatchModal()}
           >
-            Encolar lote…
+            Queue batch
           </Button>
           <Button
             variant="secondary"
             size="sm"
             loading={rescanning || scanStatus?.state === 'running'}
-            iconLeft={
-              rescanning || scanStatus?.state === 'running' ? undefined : 'refresh'
-            }
+            iconLeft={rescanning || scanStatus?.state === 'running' ? undefined : 'refresh'}
             onClick={() => void rescan()}
           >
             {rescanning || scanStatus?.state === 'running' ? 'Scanning…' : 'Rescan'}
@@ -292,10 +320,167 @@ export default function LibraryPage() {
         </div>
       </div>
 
-      {/* Filters Panel */}
-      <div className="bg-surface-container rounded-lg overflow-hidden">
+      <div className="md:hidden bg-surface-container rounded-lg p-3 space-y-3">
+        <div className="relative">
+          <input
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setCurrentPage(1);
+            }}
+            placeholder="Search files…"
+            className="w-full engraved-input text-sm px-3 py-2 pl-9"
+          />
+          <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-[16px] pointer-events-none">
+            search
+          </span>
+        </div>
+
+        <div className="flex items-center gap-2 overflow-x-auto custom-scrollbar pb-1">
+          <FilterChip
+            active={statusFilter === 'all'}
+            onClick={() => {
+              setStatusFilter('all');
+              setCurrentPage(1);
+            }}
+          >
+            All
+          </FilterChip>
+          <FilterChip
+            active={statusFilter === 'ready'}
+            onClick={() => {
+              setStatusFilter('ready');
+              setCurrentPage(1);
+            }}
+          >
+            Ready
+          </FilterChip>
+          <FilterChip
+            active={statusFilter === 'skipped'}
+            onClick={() => {
+              setStatusFilter('skipped');
+              setCurrentPage(1);
+            }}
+          >
+            Skipped
+          </FilterChip>
+          <FilterChip
+            active={statusFilter === 'no-source'}
+            onClick={() => {
+              setStatusFilter('no-source');
+              setCurrentPage(1);
+            }}
+          >
+            No source
+          </FilterChip>
+          <FilterChip
+            active={missingTargetOnly}
+            onClick={() => {
+              setMissingTargetOnly((v) => !v);
+              setCurrentPage(1);
+            }}
+          >
+            Missing {targetLangFilter.toUpperCase()}
+          </FilterChip>
+          <button
+            type="button"
+            onClick={() => setMobileFiltersOpen((v) => !v)}
+            className="btn btn-ghost btn-xs gap-1 text-on-surface-variant"
+          >
+            <span className="material-symbols-outlined text-[14px]">
+              {mobileFiltersOpen ? 'expand_less' : 'tune'}
+            </span>
+            Filters
+          </button>
+        </div>
+
+        {mobileFiltersOpen && (
+          <div className="space-y-2 pt-2 border-t border-outline-variant/15">
+            <div className="grid grid-cols-2 gap-2">
+              <div className="relative col-span-2">
+                <select
+                  value={folderFilter}
+                  onChange={(e) => {
+                    setFolderFilter(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  className="w-full engraved-input text-sm px-3 py-2 pr-8 appearance-none cursor-pointer"
+                >
+                  <option value="all">All folders</option>
+                  {folders.map((f) => (
+                    <option key={f} value={f} title={f}>
+                      {f.split('/').slice(-2).join('/')}
+                    </option>
+                  ))}
+                </select>
+                <span className="material-symbols-outlined absolute right-2.5 top-1/2 -translate-y-1/2 text-on-surface-variant text-[16px] pointer-events-none">
+                  folder
+                </span>
+              </div>
+              <div className="relative">
+                <select
+                  value={librarySort}
+                  onChange={(e) => {
+                    setLibrarySort(e.target.value as typeof librarySort);
+                    setCurrentPage(1);
+                  }}
+                  className="w-full engraved-input text-sm px-3 py-2 pr-8 appearance-none cursor-pointer"
+                >
+                  <option value="name">Sort: name</option>
+                  <option value="size">Sort: size</option>
+                  <option value="date">Sort: date</option>
+                  <option value="tracks">Sort: tracks</option>
+                </select>
+                <span className="material-symbols-outlined absolute right-2.5 top-1/2 -translate-y-1/2 text-on-surface-variant text-[16px] pointer-events-none">
+                  sort
+                </span>
+              </div>
+              <div className="relative">
+                <select
+                  value={libraryOrder}
+                  onChange={(e) => {
+                    setLibraryOrder(e.target.value as typeof libraryOrder);
+                    setCurrentPage(1);
+                  }}
+                  className="w-full engraved-input text-sm px-3 py-2 pr-8 appearance-none cursor-pointer"
+                >
+                  <option value="asc">Ascending</option>
+                  <option value="desc">Descending</option>
+                </select>
+                <span className="material-symbols-outlined absolute right-2.5 top-1/2 -translate-y-1/2 text-on-surface-variant text-[16px] pointer-events-none">
+                  expand_more
+                </span>
+              </div>
+              <input
+                value={targetLangFilter}
+                onChange={(e) => setTargetLangFilter(e.target.value)}
+                placeholder="Target language (e.g. spa)"
+                className="col-span-2 engraved-input text-sm px-3 py-2"
+              />
+            </div>
+
+            {activeFiltersCount > 0 && (
+              <button
+                onClick={() => {
+                  setQuery('');
+                  setFolderFilter('all');
+                  setStatusFilter('all');
+                  setMissingTargetOnly(false);
+                  setCurrentPage(1);
+                }}
+                className="text-xs text-on-surface-variant hover:text-on-surface transition-colors flex items-center gap-1"
+              >
+                <span className="material-symbols-outlined text-[14px]">close</span>
+                Clear all filters
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="hidden md:block bg-surface-container rounded-lg overflow-hidden">
         <button
-          onClick={() => setFiltersOpen(v => !v)}
+          onClick={() => setFiltersOpen((v) => !v)}
           className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-colors"
         >
           <span className="flex items-center gap-2">
@@ -307,7 +492,10 @@ export default function LibraryPage() {
               </span>
             )}
           </span>
-          <span className="material-symbols-outlined text-[18px] transition-transform" style={{ transform: filtersOpen ? 'rotate(180deg)' : undefined }}>
+          <span
+            className="material-symbols-outlined text-[18px] transition-transform"
+            style={{ transform: filtersOpen ? 'rotate(180deg)' : undefined }}
+          >
             expand_more
           </span>
         </button>
@@ -315,69 +503,85 @@ export default function LibraryPage() {
         {filtersOpen && (
           <div className="px-4 pb-4 space-y-3 border-t border-outline-variant/15">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-2 pt-3">
-              {/* Search */}
               <div className="relative sm:col-span-2 lg:col-span-1">
                 <input
                   value={query}
-                  onChange={e => { setQuery(e.target.value); setCurrentPage(1); }}
+                  onChange={(e) => {
+                    setQuery(e.target.value);
+                    setCurrentPage(1);
+                  }}
                   placeholder="Search files…"
                   className="w-full engraved-input text-sm px-3 py-2 pl-9"
                 />
-                <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-[16px] pointer-events-none">search</span>
+                <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-[16px] pointer-events-none">
+                  search
+                </span>
               </div>
 
               <div className="relative">
                 <select
                   value={librarySort}
-                  onChange={e => {
+                  onChange={(e) => {
                     setLibrarySort(e.target.value as typeof librarySort);
                     setCurrentPage(1);
                   }}
                   className="w-full engraved-input text-sm px-3 py-2 pr-8 appearance-none cursor-pointer"
                 >
-                  <option value="name">Orden: nombre</option>
-                  <option value="size">Orden: tamaño</option>
-                  <option value="date">Orden: fecha</option>
-                  <option value="tracks">Orden: pistas</option>
+                  <option value="name">Sort: name</option>
+                  <option value="size">Sort: size</option>
+                  <option value="date">Sort: date</option>
+                  <option value="tracks">Sort: tracks</option>
                 </select>
-                <span className="material-symbols-outlined absolute right-2.5 top-1/2 -translate-y-1/2 text-on-surface-variant text-[16px] pointer-events-none">sort</span>
+                <span className="material-symbols-outlined absolute right-2.5 top-1/2 -translate-y-1/2 text-on-surface-variant text-[16px] pointer-events-none">
+                  sort
+                </span>
               </div>
 
               <div className="relative">
                 <select
                   value={libraryOrder}
-                  onChange={e => {
+                  onChange={(e) => {
                     setLibraryOrder(e.target.value as typeof libraryOrder);
                     setCurrentPage(1);
                   }}
                   className="w-full engraved-input text-sm px-3 py-2 pr-8 appearance-none cursor-pointer"
                 >
-                  <option value="asc">Ascendente</option>
-                  <option value="desc">Descendente</option>
+                  <option value="asc">Ascending</option>
+                  <option value="desc">Descending</option>
                 </select>
-                <span className="material-symbols-outlined absolute right-2.5 top-1/2 -translate-y-1/2 text-on-surface-variant text-[16px] pointer-events-none">expand_more</span>
+                <span className="material-symbols-outlined absolute right-2.5 top-1/2 -translate-y-1/2 text-on-surface-variant text-[16px] pointer-events-none">
+                  expand_more
+                </span>
               </div>
 
-              {/* Folder */}
               <div className="relative sm:col-span-2 lg:col-span-1">
                 <select
                   value={folderFilter}
-                  onChange={e => { setFolderFilter(e.target.value); setCurrentPage(1); }}
+                  onChange={(e) => {
+                    setFolderFilter(e.target.value);
+                    setCurrentPage(1);
+                  }}
                   className="w-full engraved-input text-sm px-3 py-2 pr-8 appearance-none cursor-pointer"
                 >
                   <option value="all">All Folders</option>
-                  {folders.map(f => (
-                    <option key={f} value={f} title={f}>{f.split('/').slice(-2).join('/')}</option>
+                  {folders.map((f) => (
+                    <option key={f} value={f} title={f}>
+                      {f.split('/').slice(-2).join('/')}
+                    </option>
                   ))}
                 </select>
-                <span className="material-symbols-outlined absolute right-2.5 top-1/2 -translate-y-1/2 text-on-surface-variant text-[16px] pointer-events-none">folder</span>
+                <span className="material-symbols-outlined absolute right-2.5 top-1/2 -translate-y-1/2 text-on-surface-variant text-[16px] pointer-events-none">
+                  folder
+                </span>
               </div>
 
-              {/* Status */}
               <div className="relative">
                 <select
                   value={statusFilter}
-                  onChange={e => { setStatusFilter(e.target.value as typeof statusFilter); setCurrentPage(1); }}
+                  onChange={(e) => {
+                    setStatusFilter(e.target.value as typeof statusFilter);
+                    setCurrentPage(1);
+                  }}
                   className="w-full engraved-input text-sm px-3 py-2 pr-8 appearance-none cursor-pointer"
                 >
                   <option value="all">All statuses</option>
@@ -385,27 +589,32 @@ export default function LibraryPage() {
                   <option value="skipped">Skipped</option>
                   <option value="no-source">No source</option>
                 </select>
-                <span className="material-symbols-outlined absolute right-2.5 top-1/2 -translate-y-1/2 text-on-surface-variant text-[16px] pointer-events-none">expand_more</span>
+                <span className="material-symbols-outlined absolute right-2.5 top-1/2 -translate-y-1/2 text-on-surface-variant text-[16px] pointer-events-none">
+                  expand_more
+                </span>
               </div>
 
-              {/* Target lang */}
               <input
                 value={targetLangFilter}
-                onChange={e => setTargetLangFilter(e.target.value)}
-                placeholder="Target lang (e.g. spa)"
+                onChange={(e) => setTargetLangFilter(e.target.value)}
+                placeholder="Target language (e.g. spa)"
                 className="engraved-input text-sm px-3 py-2"
               />
 
-              {/* Missing target chip */}
-              <label className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm cursor-pointer border transition-colors ${
-                missingTargetOnly
-                  ? 'border-primary/40 bg-primary/8 text-primary'
-                  : 'border-outline-variant engraved-input text-on-surface-variant hover:text-on-surface'
-              }`}>
+              <label
+                className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm cursor-pointer border transition-colors ${
+                  missingTargetOnly
+                    ? 'border-primary/40 bg-primary/8 text-primary'
+                    : 'border-outline-variant engraved-input text-on-surface-variant hover:text-on-surface'
+                }`}
+              >
                 <input
                   type="checkbox"
                   checked={missingTargetOnly}
-                  onChange={e => { setMissingTargetOnly(e.target.checked); setCurrentPage(1); }}
+                  onChange={(e) => {
+                    setMissingTargetOnly(e.target.checked);
+                    setCurrentPage(1);
+                  }}
                   className="h-3.5 w-3.5 accent-primary"
                 />
                 <span className="truncate font-medium">Missing target</span>
@@ -414,7 +623,13 @@ export default function LibraryPage() {
 
             {activeFiltersCount > 0 && (
               <button
-                onClick={() => { setQuery(''); setFolderFilter('all'); setStatusFilter('all'); setMissingTargetOnly(false); setCurrentPage(1); }}
+                onClick={() => {
+                  setQuery('');
+                  setFolderFilter('all');
+                  setStatusFilter('all');
+                  setMissingTargetOnly(false);
+                  setCurrentPage(1);
+                }}
                 className="text-xs text-on-surface-variant hover:text-on-surface transition-colors flex items-center gap-1"
               >
                 <span className="material-symbols-outlined text-[14px]">close</span>
@@ -425,8 +640,7 @@ export default function LibraryPage() {
         )}
       </div>
 
-      {/* Table */}
-      <div className="bg-surface-container rounded-lg overflow-hidden">
+      <div className="hidden md:block bg-surface-container rounded-lg overflow-hidden">
         <div className="overflow-x-auto custom-scrollbar">
           <table className="w-full text-sm data-table min-w-[640px]">
             <thead>
@@ -620,11 +834,168 @@ export default function LibraryPage() {
         )}
       </div>
 
-      {/* Floating Batch Action Bar */}
+      <div className="md:hidden bg-surface-container rounded-lg overflow-hidden">
+        <div className="px-3 py-2 border-b border-outline-variant/15 flex items-center justify-between">
+          <label className="flex items-center gap-2 text-xs text-on-surface-variant">
+            <input
+              type="checkbox"
+              checked={allSelected}
+              ref={(el) => {
+                if (el) el.indeterminate = someSelected;
+              }}
+              onChange={toggleAll}
+              className="h-3.5 w-3.5 accent-primary cursor-pointer rounded"
+            />
+            Select all
+          </label>
+          <span className="text-xs text-on-surface-variant">{filtered.length} items</span>
+        </div>
+
+        <div className="divide-y divide-outline-variant/10">
+          {loading &&
+            Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="p-3 space-y-2">
+                <div className="skeleton h-4 w-3/4" />
+                <div className="skeleton h-3 w-full" />
+                <div className="skeleton h-3 w-1/2" />
+              </div>
+            ))}
+
+          {!loading && !paginated.length && (
+            <div className="p-2">
+              <EmptyState
+                icon="video_library"
+                title={query || activeFiltersCount > 0 ? 'No matching files' : 'No media files found'}
+                description={
+                  query || activeFiltersCount > 0
+                    ? 'Try adjusting your filters'
+                    : 'Configure your media directories in Settings to get started'
+                }
+                action={
+                  !query && activeFiltersCount === 0 ? (
+                    <Link href="/settings" className="btn btn-primary btn-sm">
+                      <span className="material-symbols-outlined text-[16px]">settings</span>
+                      Open Settings
+                    </Link>
+                  ) : undefined
+                }
+              />
+            </div>
+          )}
+
+          {!loading &&
+            paginated.map((item) => {
+              const hasSource = item.subtitleTracks.length > 0;
+              const statusLabel = item.ruleStatus?.skip ? 'skipped' : hasSource ? 'ready' : 'no-source';
+              const isSelected = Boolean(selected[item.id]);
+              const target = targetLangFilter.toLowerCase();
+              const hasTarget =
+                item.subtitleTracks.some((t) => t.language === target) ||
+                item.externalSubtitles.some((s) => s.language === target);
+
+              return (
+                <div
+                  key={item.id}
+                  className={`p-3 space-y-2 ${isSelected ? 'bg-primary/5' : 'bg-surface-container'}`}
+                >
+                  <div className="flex items-start gap-2">
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => toggleSelection(item.id)}
+                      className="h-4 w-4 mt-0.5 accent-primary cursor-pointer rounded"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="font-medium text-sm text-on-surface truncate">{item.name}</span>
+                        {hasTarget && (
+                          <Badge variant="success" icon="done_all">
+                            {target.toUpperCase()}
+                          </Badge>
+                        )}
+                        <Badge
+                          variant={
+                            statusLabel === 'ready'
+                              ? 'success'
+                              : statusLabel === 'skipped'
+                                ? 'warning'
+                                : 'error'
+                          }
+                        >
+                          {statusLabel === 'no-source' ? 'No source' : statusLabel}
+                        </Badge>
+                      </div>
+                      <p
+                        className="mt-1 text-[11px] font-mono text-on-surface-variant truncate"
+                        title={item.path}
+                      >
+                        {item.path}
+                      </p>
+                    </div>
+                    <Link
+                      href={`/library/${item.id}`}
+                      className="btn btn-ghost btn-icon btn-xs"
+                      title="View details"
+                    >
+                      <span className="material-symbols-outlined text-[18px]">open_in_new</span>
+                    </Link>
+                  </div>
+
+                  <div className="flex items-center gap-1 flex-wrap">
+                    {item.subtitleTracks.slice(0, 3).map((track) => (
+                      <span
+                        key={track.index}
+                        className="bg-surface-container-high border border-outline-variant/30 px-1.5 py-0.5 rounded text-[10px] font-mono text-on-surface-variant"
+                      >
+                        {track.language}
+                      </span>
+                    ))}
+                    {item.subtitleTracks.length > 3 && (
+                      <span className="text-[10px] text-primary font-semibold">
+                        +{item.subtitleTracks.length - 3}
+                      </span>
+                    )}
+                    {item.subtitleTracks.length === 0 && (
+                      <span className="text-[10px] text-on-surface-variant/50">No embedded tracks</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+        </div>
+
+        {!loading && filtered.length > 0 && (
+          <div className="flex items-center justify-between px-3 py-2 border-t border-outline-variant/15 bg-surface-container-low">
+            <span className="text-xs text-on-surface-variant">
+              {(currentPage - 1) * itemsPerPage + 1}–{Math.min(currentPage * itemsPerPage, filtered.length)} of{' '}
+              {filtered.length}
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                className="btn btn-ghost btn-icon btn-xs"
+              >
+                <span className="material-symbols-outlined text-[16px]">chevron_left</span>
+              </button>
+              <span className="text-xs text-on-surface-variant px-1 font-mono">
+                {currentPage}/{totalPages}
+              </span>
+              <button
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                className="btn btn-ghost btn-icon btn-xs"
+              >
+                <span className="material-symbols-outlined text-[16px]">chevron_right</span>
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
       {selectedItemsAll.length > 0 && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-30 w-full max-w-2xl px-4">
+        <div className="hidden md:block fixed bottom-6 left-1/2 -translate-x-1/2 z-30 w-full max-w-2xl px-4">
           <div className="bg-surface-container-highest border border-outline-variant/30 rounded-xl shadow-2xl px-4 py-3 flex flex-col sm:flex-row items-start sm:items-center gap-3 fade-in">
-            {/* Selection info */}
             <div className="flex items-center gap-2 text-sm font-medium text-on-surface flex-shrink-0">
               <span className="bg-primary-container text-on-primary-container text-xs font-bold px-2 py-0.5 rounded">
                 {selectedItemsAll.length}
@@ -632,7 +1003,6 @@ export default function LibraryPage() {
               item{selectedItemsAll.length !== 1 ? 's' : ''} selected
             </div>
 
-            {/* Language + Provider selectors */}
             <div className="flex items-center gap-2 flex-wrap flex-1">
               <div className="flex items-center gap-1.5 bg-surface-container rounded-md px-2 py-1.5 border border-outline-variant/30">
                 <select
@@ -666,7 +1036,6 @@ export default function LibraryPage() {
               </div>
             </div>
 
-            {/* Actions */}
             <div className="flex items-center gap-2 flex-shrink-0">
               <button
                 onClick={() => setSelected({})}
@@ -680,12 +1049,80 @@ export default function LibraryPage() {
                 iconLeft="fact_check"
                 onClick={() => openBatchModal()}
               >
-                Revisar y encolar
+                Review and queue
                 {selectedItemsAll.length > 0 ? ` (${selectedItemsAll.length})` : ''}
               </Button>
             </div>
           </div>
         </div>
+      )}
+
+      {selectedItemsAll.length > 0 && (
+        <MobileStickyActionBar>
+          <div className="space-y-2 fade-in">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-sm font-medium text-on-surface">
+                <span className="bg-primary-container text-on-primary-container text-xs font-bold px-2 py-0.5 rounded">
+                  {selectedItemsAll.length}
+                </span>
+                selected
+              </div>
+              <button
+                onClick={() => setSelected({})}
+                className="text-xs text-on-surface-variant hover:text-on-surface transition-colors"
+              >
+                Clear
+              </button>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <select
+                value={batchSource}
+                onChange={(e) => setBatchSource(e.target.value)}
+                className="engraved-input text-xs px-2 py-1.5 flex-1"
+                title="Source language"
+              >
+                {COMMON_LANGUAGES.map((l) => (
+                  <option key={l.code} value={l.code}>
+                    {l.code.toUpperCase()}
+                  </option>
+                ))}
+              </select>
+              <span className="material-symbols-outlined text-on-surface-variant text-[14px]">arrow_forward</span>
+              <select
+                value={batchTarget}
+                onChange={(e) => setBatchTarget(e.target.value)}
+                className="engraved-input text-xs px-2 py-1.5 flex-1"
+                title="Target language"
+              >
+                {COMMON_LANGUAGES.map((l) => (
+                  <option key={l.code} value={l.code}>
+                    {l.code.toUpperCase()}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={batchProvider}
+                onChange={(e) => setBatchProvider(e.target.value as typeof batchProvider)}
+                className="engraved-input text-xs px-2 py-1.5"
+                title="Provider"
+              >
+                <option value="openrouter">OpenRouter</option>
+                <option value="deepseek">DeepSeek</option>
+              </select>
+            </div>
+
+            <Button
+              variant="primary"
+              size="sm"
+              iconLeft="fact_check"
+              onClick={() => openBatchModal()}
+              className="w-full justify-center"
+            >
+              Queue batch ({selectedItemsAll.length})
+            </Button>
+          </div>
+        </MobileStickyActionBar>
       )}
 
       <BatchQueueModal
@@ -697,22 +1134,16 @@ export default function LibraryPage() {
         initialProvider={batchProvider}
         onEnqueued={({ queued, failed, errors }) => {
           if (failed === 0) {
-            success(
-              `Encolados: ${queued} trabajo${queued !== 1 ? 's' : ''}`,
-            );
+            success(`Queued: ${queued} job${queued !== 1 ? 's' : ''}`);
             setSelected({});
           } else if (queued > 0) {
-            success(
-              `Encolados: ${queued}, fallidos: ${failed}`,
-            );
+            success(`Queued: ${queued}, failed: ${failed}`);
             toastError(
               errors.slice(0, 4).join(' · ') +
                 (errors.length > 4 ? ` … (+${errors.length - 4})` : ''),
             );
           } else {
-            toastError(
-              errors[0] ?? 'No se pudo encolar ningún trabajo',
-            );
+            toastError(errors[0] ?? 'No jobs could be queued');
           }
         }}
       />

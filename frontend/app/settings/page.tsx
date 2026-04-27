@@ -8,6 +8,7 @@ import { COMMON_LANGUAGES } from '@/lib/languages';
 import { Button } from '@/components/ui/button';
 import { Toggle } from '@/components/ui/toggle';
 import { useToast } from '@/components/ui/toast';
+import { MobilePageHeader } from '@/components/mobile/page-header';
 
 interface TokenUsageSummary {
   free: { promptTokens: number; completionTokens: number; totalTokens: number };
@@ -169,8 +170,12 @@ export default function SettingsPage() {
 
   return (
     <section className="space-y-6">
-      {/* Header */}
-      <div className="flex items-start justify-between gap-4">
+      <MobilePageHeader
+        title="Settings"
+        subtitle="Configure translation defaults, providers, and automation"
+      />
+
+      <div className="hidden md:flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-on-surface tracking-tight">Settings</h1>
           <p className="text-sm text-on-surface-variant mt-0.5">Configure your translation preferences</p>
@@ -180,12 +185,12 @@ export default function SettingsPage() {
       {/* Tabs + Content */}
       <div className="flex flex-col lg:flex-row gap-6">
         {/* Tab navigation */}
-        <nav className="flex lg:flex-col gap-1 lg:w-44 flex-shrink-0">
+        <nav className="flex lg:flex-col gap-1 lg:w-44 flex-shrink-0 overflow-x-auto lg:overflow-visible custom-scrollbar pb-1 lg:pb-0">
           {TABS.map(tab => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition-all text-left
+              className={`flex-shrink-0 whitespace-nowrap flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition-all text-left
                 ${activeTab === tab.id
                   ? 'bg-primary/10 text-primary'
                   : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high'
@@ -690,8 +695,8 @@ export default function SettingsPage() {
       </div>
 
       {/* Footer Actions */}
-      <div className="flex items-center justify-between pt-4 border-t border-outline-variant/15">
-        <div className="flex gap-3">
+      <div className="flex flex-col-reverse md:flex-row md:items-center md:justify-between gap-3 pt-4 border-t border-outline-variant/15">
+        <div className="flex flex-wrap gap-3">
           <button
             onClick={() =>
               void apiPost<{ accepted: boolean }>('/library/rescan')
@@ -728,6 +733,7 @@ export default function SettingsPage() {
           loading={saving}
           iconLeft={saving ? undefined : 'save'}
           onClick={() => void save()}
+          className="w-full md:w-auto justify-center"
         >
           {saving ? 'Saving…' : 'Save Settings'}
         </Button>

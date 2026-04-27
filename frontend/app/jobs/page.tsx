@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { ProgressBar } from '@/components/ui/progress-bar';
 import { useToast } from '@/components/ui/toast';
+import { MobilePageHeader } from '@/components/mobile/page-header';
 
 interface LiveTokenUsage {
   promptTokens: number;
@@ -76,7 +77,7 @@ function formatElapsed(ms: number): string {
 
 function formatEtaRemaining(ms: number): string {
   if (ms <= 0 || !Number.isFinite(ms)) return '';
-  return `≈ ${formatElapsed(ms)} restantes`;
+  return `≈ ${formatElapsed(ms)} remaining`;
 }
 
 function jobEtaLabel(job: JobResult, progressPct: number, nowMs: number): string | null {
@@ -167,10 +168,10 @@ export default function JobsPage() {
         setLiveEvents(prev => ({ ...prev, [String(job.id)]: payload }));
         const ph = payload.phase.toLowerCase();
         if (ph === 'completed') {
-          tryBrowserNotify('Traducción lista', payload.message || 'Job completado');
+          tryBrowserNotify('Translation done', payload.message || 'Job completed');
         }
         if (ph === 'failed') {
-          tryBrowserNotify('Traducción fallida', payload.message || 'Error en el job');
+          tryBrowserNotify('Translation failed', payload.message || 'Job failed');
         }
       };
       return src;
@@ -230,8 +231,9 @@ export default function JobsPage() {
 
   return (
     <section className="space-y-6">
-      {/* Header */}
-      <div>
+      <MobilePageHeader title="Jobs" subtitle="Translation queue and processing status" />
+
+      <div className="hidden md:block">
         <h1 className="text-2xl font-bold text-on-surface tracking-tight">Jobs</h1>
         <p className="text-sm text-on-surface-variant mt-0.5">Translation queue and processing status</p>
       </div>
@@ -244,7 +246,7 @@ export default function JobsPage() {
         <StatCard label="Failed"    value={stats.failed}    icon="error"           variant="error" />
       </div>
 
-      {/* Tokens hoy (UTC) — mismo polling que jobs */}
+      {/* Today tokens (UTC) */}
       {tokenSummary?.today && (
         <div className="bg-surface-container rounded-lg p-4 border border-outline-variant/15 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
@@ -252,7 +254,7 @@ export default function JobsPage() {
               token
             </span>
             <div className="min-w-0">
-              <p className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">Tokens hoy (UTC)</p>
+              <p className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">Today tokens (UTC)</p>
               <p className="text-sm text-on-surface mt-0.5">
                 <span className="font-mono">Free</span>{' '}
                 <span className="font-mono font-semibold">{formatTokenShort(tokenSummary.today.free.totalTokens)}</span>
@@ -266,7 +268,7 @@ export default function JobsPage() {
             </div>
           </div>
           <p className="text-[11px] text-on-surface-variant sm:text-right shrink-0">
-            Coste estimado DeepSeek (cache miss) sobre tokens paid del día
+            DeepSeek estimated cost (cache miss) based on today paid tokens
           </p>
         </div>
       )}

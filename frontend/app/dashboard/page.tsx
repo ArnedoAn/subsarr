@@ -16,6 +16,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
+import { MobilePageHeader } from '@/components/mobile/page-header';
 
 type TierBlock = {
   promptTokens: number;
@@ -153,8 +154,10 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="space-y-8">
-      <div>
+    <div className="space-y-6 md:space-y-8">
+      <MobilePageHeader title="Dashboard" subtitle="KPIs, job trends, token usage, and queue health." />
+
+      <div className="hidden md:block">
         <h1 className="text-2xl font-bold text-on-surface tracking-tight">Dashboard</h1>
         <p className="text-sm text-on-surface-variant mt-1">
           KPIs, tendencias de jobs y tokens, y estado de la cola.
@@ -217,7 +220,8 @@ export default function DashboardPage() {
 
       <div className="grid gap-6 lg:grid-cols-2">
         <ChartCard title="Jobs por día (30 días)">
-          <ResponsiveContainer width="100%" height={280}>
+          <div className="h-[220px] sm:h-[280px]">
+            <ResponsiveContainer width="100%" height="100%">
             <BarChart data={jobsChartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID} />
               <XAxis dataKey="label" tick={{ fill: CHART_AXIS, fontSize: 10 }} interval={4} />
@@ -235,11 +239,13 @@ export default function DashboardPage() {
               <Bar dataKey="failed" stackId="a" fill={COLORS.failed} name="Fallidos" />
               <Bar dataKey="cancelled" stackId="a" fill={COLORS.cancelled} name="Cancelados" />
             </BarChart>
-          </ResponsiveContainer>
+            </ResponsiveContainer>
+          </div>
         </ChartCard>
 
         <ChartCard title="Tokens por día — free vs paid">
-          <ResponsiveContainer width="100%" height={280}>
+          <div className="h-[220px] sm:h-[280px]">
+            <ResponsiveContainer width="100%" height="100%">
             <BarChart data={tokensChartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID} />
               <XAxis dataKey="label" tick={{ fill: CHART_AXIS, fontSize: 10 }} interval={4} />
@@ -255,14 +261,16 @@ export default function DashboardPage() {
               <Bar dataKey="free" stackId="t" fill={COLORS.free} name="Free" />
               <Bar dataKey="paid" stackId="t" fill={COLORS.paid} name="Paid" />
             </BarChart>
-          </ResponsiveContainer>
+            </ResponsiveContainer>
+          </div>
         </ChartCard>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
         <ChartCard title="Cola Bull (Redis)">
           {data.queue.ok && queuePie.length > 0 ? (
-            <ResponsiveContainer width="100%" height={260}>
+            <div className="h-[220px] sm:h-[260px]">
+              <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
                   data={queuePie}
@@ -285,7 +293,8 @@ export default function DashboardPage() {
                   }}
                 />
               </PieChart>
-            </ResponsiveContainer>
+              </ResponsiveContainer>
+            </div>
           ) : (
             <div className="h-[260px] flex flex-col items-center justify-center text-sm text-on-surface-variant px-4 text-center">
               {data.queue.ok ? (
