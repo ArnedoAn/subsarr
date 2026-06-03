@@ -2,76 +2,82 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { useMemo, useState } from 'react';
 import { ThemeToggle } from '@/components/theme-toggle';
-import { useEffect, useState } from 'react';
 import { appStrings } from '@/lib/app-strings';
 
 const navLinks = [
-  { href: '/',        label: appStrings.nav.library,  icon: 'video_library' },
+  { href: '/', label: appStrings.nav.library, icon: 'video_library' },
   { href: '/dashboard', label: appStrings.nav.dashboard, icon: 'dashboard' },
-  { href: '/jobs',    label: appStrings.nav.jobs,     icon: 'work_history'  },
-  { href: '/rename',  label: appStrings.nav.rename,   icon: 'drive_file_rename_outline' },
-  { href: '/archive', label: appStrings.nav.logs,     icon: 'terminal'      },
-  { href: '/settings',label: appStrings.nav.settings, icon: 'settings'      },
+  { href: '/jobs', label: appStrings.nav.jobs, icon: 'work_history' },
+  { href: '/rename', label: appStrings.nav.rename, icon: 'drive_file_rename_outline' },
+  { href: '/archive', label: appStrings.nav.logs, icon: 'terminal' },
+  { href: '/settings', label: appStrings.nav.settings, icon: 'settings' },
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
-  const [mobileOpen, setMobileOpen] = useState(false);
 
-  /* Close mobile drawer on navigation */
-  useEffect(() => {
-    setMobileOpen(false);
-  }, [pathname]);
-
-  /* Lock body scroll when mobile drawer open */
-  useEffect(() => {
-    document.body.style.overflow = mobileOpen ? 'hidden' : '';
-    return () => { document.body.style.overflow = ''; };
-  }, [mobileOpen]);
+  const activeLink = useMemo(
+    () =>
+      navLinks.find((link) =>
+        link.href === '/' ? pathname === '/' : pathname.startsWith(link.href),
+      ) ?? navLinks[0],
+    [pathname],
+  );
 
   return (
     <div className="min-h-screen bg-background text-on-surface">
-      {/* ─── Top Header ─── */}
-      <header className="fixed top-0 left-0 right-0 z-40 h-14 bg-surface-container-low flex items-center px-4 gap-3">
-        {/* Hamburger — always visible */}
-        {/* Un solo botón por viewport: .btn fuerza display y anula `hidden` sin !important */}
+      <header className="fixed top-0 left-0 right-0 z-40 h-14 bg-surface-container-low border-b border-outline-variant/20 flex items-center px-3 md:px-4 gap-3">
         <button
-          onClick={() => {
-            if (window.innerWidth < 768) {
-              setMobileOpen(v => !v);
-            } else {
-              setCollapsed(v => !v);
-            }
-          }}
-          className="btn btn-ghost btn-icon md:!hidden"
-          aria-label="Toggle navigation"
-        >
-          <span className="material-symbols-outlined text-[20px]">menu</span>
-        </button>
-        <button
-          onClick={() => setCollapsed(v => !v)}
-          className="btn btn-ghost btn-icon !hidden md:!flex"
+          onClick={() => setCollapsed((v) => !v)}
+          className="btn btn-ghost btn-icon hidden md:!flex"
           aria-label="Toggle sidebar"
         >
           <span className="material-symbols-outlined text-[20px]">menu</span>
         </button>
 
-        {/* Logo */}
-        <Link href="/" className="text-base font-bold tracking-tight text-primary select-none">
+        <div className="md:hidden flex items-center gap-2 min-w-0">
+          <span
+            className="material-symbols-outlined text-[20px] text-primary"
+            style={{ fontVariationSettings: 'FILL 1' }}
+          >
+            {activeLink.icon}
+          </span>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-on-surface truncate">{activeLink.label}</p>
+            <p className="text-[10px] uppercase tracking-wide text-on-surface-variant">
+              Subsarr
+            </p>
+          </div>
+        </div>
+
+        <Link
+          href="/"
+          className="hidden md:block text-base font-bold tracking-tight text-primary select-none"
+        >
           Subsarr
         </Link>
 
-        {/* Spacer */}
         <div className="flex-1" />
 
         <ThemeToggle />
 
-        {/* Header actions */}
+        {pathname !== '/settings' && (
+          <Link
+            href="/settings"
+            className="md:hidden btn btn-ghost btn-icon"
+            aria-label="Open settings"
+          >
+            <span className="material-symbols-outlined text-[20px]">settings</span>
+          </Link>
+        )}
+
         <nav className="hidden md:flex items-center gap-1">
-          {navLinks.map(link => {
-            const active = link.href === '/' ? pathname === '/' : pathname.startsWith(link.href);
+          {navLinks.map((link) => {
+            const active =
+              link.href === '/' ? pathname === '/' : pathname.startsWith(link.href);
             return (
               <Link
                 key={link.href}
@@ -89,18 +95,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </nav>
       </header>
 
-      {/* ─── Mobile overlay ─── */}
-      {mobileOpen && (
-        <div
-          className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm md:hidden fade-in"
-          onClick={() => setMobileOpen(false)}
-        />
-      )}
-
-      {/* ─── Sidebar ─── */}
       <aside
         className={`
-          fixed top-14 bottom-0 left-0 z-50
+          fixed top-14 bottom-0 left-0 z-30
           bg-surface-container-low flex flex-col
           transition-[width] duration-250 ease-in-out
           border-r border-outline-variant/20
@@ -111,41 +108,57 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <SidebarContent collapsed={collapsed} pathname={pathname} />
       </aside>
 
-      {/* Mobile Drawer */}
-      <aside
-        className={`
-          fixed top-14 bottom-0 left-0 z-50 w-[220px]
-          bg-surface-container-low flex flex-col
-          border-r border-outline-variant/20
-          md:hidden
-          ${mobileOpen ? 'drawer-open' : 'translate-x-[-100%]'}
-        `}
-        style={{ transform: mobileOpen ? undefined : 'translateX(-100%)' }}
-      >
-        <SidebarContent collapsed={false} pathname={pathname} />
-      </aside>
-
-      {/* ─── Main Content ─── */}
       <main
-        className={`pt-14 min-h-screen bg-surface transition-[margin-left] duration-250 ease-in-out ${
+        className={`pt-14 pb-[84px] md:pb-0 min-h-screen bg-surface transition-[margin-left] duration-250 ease-in-out ${
           collapsed ? 'md:ml-[60px]' : 'md:ml-[220px]'
         }`}
       >
-        <div className="max-w-6xl mx-auto px-4 md:px-8 py-8">
-          {children}
-        </div>
+        <div className="max-w-6xl mx-auto px-4 md:px-8 py-6 md:py-8">{children}</div>
       </main>
+
+      <nav className="fixed bottom-0 left-0 right-0 z-40 h-[72px] bg-surface-container-low border-t border-outline-variant/20 md:hidden">
+        <ul className="h-full grid grid-cols-6">
+          {navLinks.map((link) => {
+            const active =
+              link.href === '/' ? pathname === '/' : pathname.startsWith(link.href);
+            return (
+              <li key={link.href} className="min-w-0">
+                <Link
+                  href={link.href}
+                  className={`h-full flex flex-col items-center justify-center gap-1 text-[10px] font-medium ${
+                    active ? 'text-primary' : 'text-on-surface-variant'
+                  }`}
+                >
+                  <span
+                    className="material-symbols-outlined text-[19px]"
+                    style={{ fontVariationSettings: active ? 'FILL 1' : 'FILL 0' }}
+                  >
+                    {link.icon}
+                  </span>
+                  <span className="truncate max-w-[54px]">{link.label}</span>
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      </nav>
     </div>
   );
 }
 
-function SidebarContent({ collapsed, pathname }: { collapsed: boolean; pathname: string }) {
+function SidebarContent({
+  collapsed,
+  pathname,
+}: {
+  collapsed: boolean;
+  pathname: string;
+}) {
   return (
     <>
-      {/* Nav Links */}
       <nav className="flex-1 py-4 space-y-0.5 overflow-y-auto overflow-x-hidden">
-        {navLinks.map(link => {
-          const active = link.href === '/' ? pathname === '/' : pathname.startsWith(link.href);
+        {navLinks.map((link) => {
+          const active =
+            link.href === '/' ? pathname === '/' : pathname.startsWith(link.href);
           return (
             <Link
               key={link.href}
@@ -154,11 +167,16 @@ function SidebarContent({ collapsed, pathname }: { collapsed: boolean; pathname:
               className={`
                 flex items-center gap-3 px-4 py-2.5 text-sm font-medium
                 transition-all duration-150 relative group
-                ${active
-                  ? 'text-primary bg-primary/8'
-                  : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high'
+                ${
+                  active
+                    ? 'text-primary bg-primary/8'
+                    : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high'
                 }
-                ${active ? 'before:absolute before:left-0 before:top-1 before:bottom-1 before:w-0.5 before:bg-primary before:rounded-r' : ''}
+                ${
+                  active
+                    ? 'before:absolute before:left-0 before:top-1 before:bottom-1 before:w-0.5 before:bg-primary before:rounded-r'
+                    : ''
+                }
               `}
             >
               <span
@@ -167,9 +185,7 @@ function SidebarContent({ collapsed, pathname }: { collapsed: boolean; pathname:
               >
                 {link.icon}
               </span>
-              {!collapsed && (
-                <span className="truncate">{link.label}</span>
-              )}
+              {!collapsed && <span className="truncate">{link.label}</span>}
               {collapsed && (
                 <span className="absolute left-full ml-2 px-2 py-1 text-xs rounded bg-surface-container-highest text-on-surface whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg z-50">
                   {link.label}
@@ -180,7 +196,6 @@ function SidebarContent({ collapsed, pathname }: { collapsed: boolean; pathname:
         })}
       </nav>
 
-      {/* Footer */}
       <div className={`border-t border-outline-variant/20 ${collapsed ? 'p-2' : 'px-4 py-3'}`}>
         <a
           href="https://github.com/yourusername/subsarr"
@@ -189,7 +204,9 @@ function SidebarContent({ collapsed, pathname }: { collapsed: boolean; pathname:
           title={collapsed ? 'Documentation' : undefined}
           className="flex items-center gap-3 text-xs text-on-surface-variant hover:text-on-surface transition-colors py-1"
         >
-          <span className="material-symbols-outlined text-[18px] flex-shrink-0">description</span>
+          <span className="material-symbols-outlined text-[18px] flex-shrink-0">
+            description
+          </span>
           {!collapsed && <span>Docs</span>}
         </a>
       </div>

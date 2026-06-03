@@ -55,7 +55,7 @@ function itemJobEtaLabel(job: JobResult, progressPct: number, nowMs: number): st
   if (elapsed < 2000) return null;
   const eta = elapsed * (100 / progressPct - 1);
   if (!Number.isFinite(eta) || eta < 0 || eta > 72 * 3600 * 1000) return null;
-  return `≈ ${formatElapsedMs(eta)} restantes`;
+  return `≈ ${formatElapsedMs(eta)} remaining`;
 }
 
 function tryNotifyJobFinish(title: string, body: string) {
@@ -185,11 +185,11 @@ export default function LibraryItemPage() {
       setLiveJobEvent(payload);
       const ph = payload.phase.toLowerCase();
       if (ph === 'completed') {
-        tryNotifyJobFinish('Traducción lista', payload.message || 'Completado');
+        tryNotifyJobFinish('Translation completed', payload.message || 'Completed');
         void load();
       }
       if (ph === 'failed') {
-        tryNotifyJobFinish('Traducción fallida', payload.message || 'Error');
+        tryNotifyJobFinish('Translation failed', payload.message || 'Error');
         void load();
       }
     };
@@ -427,14 +427,14 @@ export default function LibraryItemPage() {
             </div>
 
             {/* Provider */}
-            <div className="flex items-center gap-3">
+            <div className="space-y-2 sm:space-y-0 sm:flex sm:items-center sm:gap-3">
               <label className="field-label flex-shrink-0">Provider</label>
-              <div className="flex gap-2">
+              <div className="grid grid-cols-1 sm:flex gap-2">
                 {(['openrouter', 'deepseek'] as const).map(p => (
                   <button
                     key={p}
                     onClick={() => setProvider(p)}
-                    className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                    className={`px-3 py-2 rounded-md text-xs font-medium transition-all text-left sm:text-center ${
                       provider === p
                         ? 'bg-primary/10 text-primary border border-primary/30'
                         : 'bg-surface-container-high text-on-surface-variant border border-outline-variant/30 hover:text-on-surface'
@@ -450,19 +450,19 @@ export default function LibraryItemPage() {
             {hasTargetLanguageConflict && (
               <div className="rounded-lg border border-outline-variant/30 bg-surface-container-high p-4 space-y-2">
                 <p className="text-xs font-semibold text-on-surface">
-                  Ya hay subtítulo en el idioma de destino
+                  Target subtitle already exists
                 </p>
                 <p className="text-[11px] text-on-surface-variant leading-relaxed">
-                  Elige si quieres sobrescribir el archivo existente o guardar una segunda pista como{' '}
+                  Choose whether to replace the existing file or write a second subtitle track as{' '}
                   <span className="font-mono text-on-surface">.{targetLanguage}.2.srt</span> /{' '}
                   <span className="font-mono text-on-surface">.{targetLanguage}.2.ass</span>.
                 </p>
                 <div className="flex flex-col gap-2 pt-1">
                   {(
                     [
-                      ['default', 'Respetar reglas (no colar si está bloqueado)'],
-                      ['replace', 'Sobrescribir el subtítulo existente'],
-                      ['alternate', 'Crear segundo archivo (.lang.2.ext)'],
+                      ['default', 'Respect rules (do not queue when blocked)'],
+                      ['replace', 'Replace existing subtitle'],
+                      ['alternate', 'Create secondary file (.lang.2.ext)'],
                     ] as const
                   ).map(([value, label]) => (
                     <label
@@ -560,13 +560,13 @@ export default function LibraryItemPage() {
               <span className="material-symbols-outlined text-[18px] text-primary animate-pulse">
                 progress_activity
               </span>
-              Job en curso
+              Active job
             </h2>
             <Link
               href="/jobs"
               className="text-xs text-primary hover:text-primary/80 transition-colors"
             >
-              Ver cola
+              View queue
             </Link>
           </div>
           <p className="text-xs font-mono text-on-surface-variant break-all">{activeJobForItem.id}</p>

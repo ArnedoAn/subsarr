@@ -3,11 +3,11 @@
  */
 export const appStrings = {
   nav: {
-    library: 'Biblioteca',
-    dashboard: 'Panel',
-    jobs: 'Trabajos',
-    logs: 'Registros',
-    rename: 'Renombrar',
-    settings: 'Ajustes',
+    library: 'Library',
+    dashboard: 'Dashboard',
+    jobs: 'Jobs',
+    logs: 'Logs',
+    rename: 'Rename',
+    settings: 'Settings',
   },
 } as const;
