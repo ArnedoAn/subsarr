@@ -13,6 +13,8 @@ export interface ComboboxProps {
   pinnedValues?: string[];
   pinnedLabel?: string;
   ariaLabel?: string;
+  /** Short label shown as a prefix badge inside the compact trigger (e.g. "SRC") */
+  triggerLabel?: string;
   compact?: boolean;
   disabled?: boolean;
 }
@@ -39,6 +41,7 @@ export function Combobox({
   pinnedValues = [],
   pinnedLabel = 'Recent',
   ariaLabel,
+  triggerLabel,
   compact = false,
   disabled = false,
 }: ComboboxProps) {
@@ -78,7 +81,6 @@ export function Combobox({
 
   const flatOptions = flat.filter((x): x is ComboboxOption => x !== 'divider');
 
-  // click-outside
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) {
@@ -122,25 +124,16 @@ export function Combobox({
     }
   };
 
-  // scroll active item into view
   useEffect(() => {
     if (activeIdx < 0 || !listRef.current) return;
     const li = listRef.current.querySelectorAll<HTMLLIElement>('li[role="option"]')[activeIdx];
     li?.scrollIntoView({ block: 'nearest' });
   }, [activeIdx]);
 
-  const triggerClass = compact
-    ? 'flex items-center gap-1 bg-transparent text-xs text-on-surface cursor-pointer focus:outline-none min-w-0'
-    : 'w-full engraved-input text-sm px-3 py-2.5 pr-9 cursor-pointer text-left flex items-center justify-between';
-
-  const displayLabel = selected
-    ? compact
-      ? selected.label
-      : `${selected.label}${selected.hint ? ` (${selected.hint})` : ''}`
-    : placeholder;
+  const displayLabel = selected ? selected.label : placeholder;
 
   return (
-    <div className="relative" ref={wrapperRef}>
+    <div className="relative w-full" ref={wrapperRef}>
       <button
         type="button"
         aria-haspopup="listbox"
@@ -149,18 +142,32 @@ export function Combobox({
         disabled={disabled}
         onClick={open ? () => setOpen(false) : openDropdown}
         onKeyDown={handleKeyDown}
-        className={triggerClass}
+        className={
+          compact
+            ? 'w-full flex items-center gap-1.5 engraved-input text-xs px-2.5 py-1.5 cursor-pointer text-left'
+            : 'w-full engraved-input text-sm px-3 py-2.5 cursor-pointer text-left flex items-center gap-2'
+        }
       >
-        <span className={`truncate flex-1 ${!selected ? 'text-on-surface-variant' : ''}`}>
+        {triggerLabel && (
+          <span className="flex-shrink-0 font-semibold text-on-surface-variant/70 uppercase tracking-wide text-[10px]">
+            {triggerLabel}
+          </span>
+        )}
+        {triggerLabel && (
+          <span className="flex-shrink-0 text-outline-variant/50 text-[10px]">·</span>
+        )}
+        <span className={`flex-1 truncate ${!selected ? 'text-on-surface-variant' : ''}`}>
           {displayLabel}
         </span>
-        <span className={`material-symbols-outlined flex-shrink-0 text-on-surface-variant ${compact ? 'text-[14px]' : 'absolute right-2.5 top-1/2 -translate-y-1/2 text-[16px]'}`}>
+        <span className={`material-symbols-outlined flex-shrink-0 text-on-surface-variant ${compact ? 'text-[13px]' : 'text-[16px]'}`}>
           {open ? 'expand_less' : 'expand_more'}
         </span>
       </button>
 
       {open && (
-        <div className="absolute z-50 w-full min-w-[200px] mt-1 bg-[var(--surface-container-high)] rounded-lg shadow-xl border border-outline-variant/20 overflow-hidden">
+        <div className="absolute z-50 left-0 mt-1 bg-[var(--surface-container-high)] rounded-lg shadow-xl border border-outline-variant/20 overflow-hidden"
+          style={{ minWidth: 'max(100%, 240px)', maxWidth: '360px' }}
+        >
           {/* Search input */}
           <div className="px-2 py-2 border-b border-outline-variant/15">
             <div className="relative">
@@ -183,14 +190,14 @@ export function Combobox({
           <ul
             ref={listRef}
             role="listbox"
-            className="max-h-56 overflow-y-auto custom-scrollbar py-1"
+            className="max-h-60 overflow-y-auto custom-scrollbar py-1"
           >
             {pinned.length > 0 && (
               <li className="px-3 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-on-surface-variant/60 select-none">
                 {pinnedLabel}
               </li>
             )}
-            {flat.map((item) => {
+            {flat.map((item, rawIdx) => {
               if (item === 'divider') {
                 return (
                   <li key="divider" className="my-1 border-t border-outline-variant/20" role="separator" />
@@ -201,7 +208,7 @@ export function Combobox({
               const isSelected = item.value === value;
               return (
                 <li
-                  key={item.value}
+                  key={`${item.value}-${rawIdx}`}
                   role="option"
                   aria-selected={isSelected}
                   onMouseDown={(e) => { e.preventDefault(); select(item.value); }}
@@ -210,15 +217,18 @@ export function Combobox({
                     isActive ? 'bg-surface-container-highest' : 'hover:bg-surface-container-highest/60'
                   } ${isSelected ? 'text-primary font-medium' : 'text-on-surface'}`}
                 >
-                  {isSelected && (
-                    <span className="material-symbols-outlined text-[13px] flex-shrink-0">check</span>
+                  {isSelected ? (
+                    <span className="material-symbols-outlined text-[13px] flex-shrink-0 text-primary">check</span>
+                  ) : (
+                    <span className="w-[13px] flex-shrink-0" />
                   )}
-                  {!isSelected && <span className="w-[13px] flex-shrink-0" />}
                   <span className="flex-1 min-w-0 truncate">
                     {highlight(item.label, query)}
                   </span>
-                  {item.hint && !query && (
-                    <span className="text-on-surface-variant/60 font-mono text-[10px] flex-shrink-0">{item.hint}</span>
+                  {item.hint && (
+                    <span className="text-on-surface-variant/60 font-mono text-[10px] flex-shrink-0 bg-surface-container-highest/60 px-1 py-0.5 rounded">
+                      {item.hint}
+                    </span>
                   )}
                 </li>
               );

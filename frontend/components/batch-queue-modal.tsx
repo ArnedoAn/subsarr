@@ -882,8 +882,8 @@ export function BatchQueueModal({
                                   </span>
                                 )}
                               </td>
-                              <td className="px-2 py-2 max-w-[200px]">
-                                <div className="font-medium text-on-surface truncate">
+                              <td className="px-2 py-2 min-w-0 w-full">
+                                <div className="font-medium text-on-surface truncate" title={it?.name}>
                                   {it?.name ?? row.mediaItemId.slice(0, 8)}
                                 </div>
                                 <div
@@ -906,7 +906,7 @@ export function BatchQueueModal({
                                   {STATUS_LABEL[row.status]}
                                 </Badge>
                               </td>
-                              <td className="px-2 py-2 text-on-surface-variant break-words max-w-[220px]">
+                              <td className="px-2 py-2 text-on-surface-variant break-words min-w-[120px]">
                                 {row.reason ??
                                   (isReady
                                     ? `pista #${row.sourceTrackIndex}`

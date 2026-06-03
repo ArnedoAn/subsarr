@@ -717,7 +717,7 @@ export default function LibraryPage() {
                         className="h-4 w-4 accent-primary cursor-pointer rounded"
                       />
                     </td>
-                    <td className="px-4 py-3 max-w-[300px]">
+                    <td className="px-4 py-3 min-w-0 w-full">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-medium text-on-surface truncate">{item.name}</span>
                         {hasTarget && (
@@ -1011,20 +1011,26 @@ export default function LibraryPage() {
             </div>
 
             <div className="flex items-center gap-2 flex-wrap flex-1">
-              <div className="flex items-center gap-1.5 bg-surface-container rounded-md px-2 py-1.5 border border-outline-variant/30">
-                <LanguageCombobox
-                  value={batchSource}
-                  onChange={setBatchSource}
-                  ariaLabel="Source Language"
-                  compact
-                />
-                <span className="material-symbols-outlined text-on-surface-variant text-[14px]">arrow_forward</span>
-                <LanguageCombobox
-                  value={batchTarget}
-                  onChange={setBatchTarget}
-                  ariaLabel="Target Language"
-                  compact
-                />
+              <div className="flex items-center gap-1.5 min-w-0">
+                <div className="min-w-[140px]">
+                  <LanguageCombobox
+                    value={batchSource}
+                    onChange={setBatchSource}
+                    ariaLabel="Source Language"
+                    triggerLabel="De"
+                    compact
+                  />
+                </div>
+                <span className="material-symbols-outlined text-on-surface-variant text-[14px] flex-shrink-0">arrow_forward</span>
+                <div className="min-w-[140px]">
+                  <LanguageCombobox
+                    value={batchTarget}
+                    onChange={setBatchTarget}
+                    ariaLabel="Target Language"
+                    triggerLabel="A"
+                    compact
+                  />
+                </div>
               </div>
               <div className="relative">
                 <select
@@ -1079,20 +1085,22 @@ export default function LibraryPage() {
             </div>
 
             <div className="flex items-center gap-1.5">
-              <div className="flex-1">
+              <div className="flex-1 min-w-0">
                 <LanguageCombobox
                   value={batchSource}
                   onChange={setBatchSource}
                   ariaLabel="Source language"
+                  triggerLabel="De"
                   compact
                 />
               </div>
-              <span className="material-symbols-outlined text-on-surface-variant text-[14px]">arrow_forward</span>
-              <div className="flex-1">
+              <span className="material-symbols-outlined text-on-surface-variant text-[14px] flex-shrink-0">arrow_forward</span>
+              <div className="flex-1 min-w-0">
                 <LanguageCombobox
                   value={batchTarget}
                   onChange={setBatchTarget}
                   ariaLabel="Target language"
+                  triggerLabel="A"
                   compact
                 />
               </div>

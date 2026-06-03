@@ -14,6 +14,8 @@ interface LanguageComboboxProps {
   value: string;
   onChange: (code: string) => void;
   ariaLabel?: string;
+  /** Short prefix badge shown inside the compact trigger, e.g. "SRC" or "DST" */
+  triggerLabel?: string;
   compact?: boolean;
   disabled?: boolean;
 }
@@ -22,6 +24,7 @@ export function LanguageCombobox({
   value,
   onChange,
   ariaLabel,
+  triggerLabel,
   compact = false,
   disabled = false,
 }: LanguageComboboxProps) {
@@ -37,6 +40,7 @@ export function LanguageCombobox({
       pinnedValues={recents}
       pinnedLabel="Recent"
       ariaLabel={ariaLabel}
+      triggerLabel={triggerLabel}
       compact={compact}
       disabled={disabled}
     />
