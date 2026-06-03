@@ -56,7 +56,7 @@ async function fetchWithRetry(url: string, options: RequestInit, retries = MAX_R
 }
 
 export async function apiGet<T>(path: string): Promise<T> {
-  const response = await fetchWithRetry(`${API_URL}${path}`, { cache: "no-store" });
+  const response = await fetchWithRetry(`${API_URL}${path}`, {});
   if (!response.ok) {
     throw new Error(await readErrorBody(response));
   }

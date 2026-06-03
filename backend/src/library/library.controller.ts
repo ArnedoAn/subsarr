@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   Param,
   Post,
   Query,
@@ -43,6 +44,7 @@ export class LibraryController {
   ) {}
 
   @Get()
+  @Header('Cache-Control', 'private, max-age=30')
   async list(@Query() query: LibraryQueryDto) {
     this.logger.log(
       `GET /library called with includeRules=${query.includeRules}`,

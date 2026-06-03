@@ -10,8 +10,12 @@ function dayKey(ms: number): string {
   return new Date(ms).toISOString().slice(0, 10);
 }
 
+const STATS_CACHE_TTL_MS = 30_000;
+
 @Injectable()
 export class StatsService {
+  private statsCache: { data: object; expiresAt: number } | null = null;
+
   constructor(
     @InjectRepository(JobSnapshotEntity)
     private readonly snapshotRepo: Repository<JobSnapshotEntity>,
@@ -22,6 +26,9 @@ export class StatsService {
 
   async getDashboardStats() {
     const now = Date.now();
+    if (this.statsCache && this.statsCache.expiresAt > now) {
+      return this.statsCache.data;
+    }
     const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
     const weekStartMs = now - 7 * 24 * 60 * 60 * 1000;
     const dayStart = new Date();
@@ -117,7 +124,7 @@ export class StatsService {
 
     const mem = process.memoryUsage();
 
-    return {
+    const result = {
       libraryItemCount: library,
       libraryScan: scanStatus,
       jobsByState,
@@ -137,5 +144,7 @@ export class StatsService {
       },
       uptimeSeconds: Math.floor(process.uptime()),
     };
+    this.statsCache = { data: result, expiresAt: Date.now() + STATS_CACHE_TTL_MS };
+    return result;
   }
 }

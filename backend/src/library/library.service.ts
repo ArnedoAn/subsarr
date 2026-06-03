@@ -4,6 +4,8 @@ import {
   NotFoundException,
   type OnModuleInit,
 } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
@@ -19,6 +21,7 @@ import {
   type MediaType,
   type SubtitleTrack,
 } from './media-item.entity';
+import { ProbeCacheEntity } from '../database/entities/probe-cache.entity';
 import { canonicalizeLanguage } from '../common/language.utils';
 
 interface CachedLibrary {
@@ -81,15 +84,51 @@ export class LibraryService implements OnModuleInit {
   };
 
   constructor(
+    @InjectRepository(ProbeCacheEntity)
+    private readonly probeCacheRepo: Repository<ProbeCacheEntity>,
     private readonly settingsService: SettingsService,
     private readonly configService: ConfigService,
   ) {}
 
-  onModuleInit() {
+  async onModuleInit() {
+    await this.restoreLibraryCacheFromDisk();
     this.logger.log('Warming up library cache on startup...');
     this.getLibrary(false, 'startup').catch((err) =>
       this.logger.error(`Library warm-up failed: ${err}`),
     );
+  }
+
+  private getLibraryCachePath(): string {
+    const config = this.configService.get<SubsyncEnvConfig>('subsync');
+    const dataDir = config?.dataDir ?? '/data';
+    return path.join(dataDir, 'library-cache.json');
+  }
+
+  private async restoreLibraryCacheFromDisk(): Promise<void> {
+    const cachePath = this.getLibraryCachePath();
+    try {
+      const raw = await fs.readFile(cachePath, 'utf8');
+      const parsed = JSON.parse(raw) as CachedLibrary;
+      if (parsed.expiresAt > Date.now()) {
+        this.cache = parsed;
+        this.logger.log(
+          `Restored ${parsed.items.length} library items from disk cache`,
+        );
+      } else {
+        this.logger.log('Disk library cache found but expired, ignoring');
+      }
+    } catch {
+      // No cache file or corrupt — proceed with empty cache
+    }
+  }
+
+  private async persistLibraryCacheToDisk(cache: CachedLibrary): Promise<void> {
+    const cachePath = this.getLibraryCachePath();
+    try {
+      await fs.writeFile(cachePath, JSON.stringify(cache), 'utf8');
+    } catch (err) {
+      this.logger.warn(`Failed to persist library cache to disk: ${err}`);
+    }
   }
 
   async getLibrary(
@@ -175,7 +214,9 @@ export class LibraryService implements OnModuleInit {
     this.scanPromise = this.performScan(settings)
       .then((items) => {
         const finishedAt = Date.now();
-        this.cache = { items, expiresAt: finishedAt + ttlMs };
+        const newCache: CachedLibrary = { items, expiresAt: finishedAt + ttlMs };
+        this.cache = newCache;
+        void this.persistLibraryCacheToDisk(newCache);
         this.scanStatus = {
           ...this.scanStatus,
           state: 'completed',
@@ -310,11 +351,18 @@ export class LibraryService implements OnModuleInit {
     },
   ): Promise<MediaItem> {
     const stats = await fs.stat(filePath);
-    const subtitleTracks =
+    const tooBig =
       options.fileTooLargeBytes != null &&
-      stats.size > options.fileTooLargeBytes
-        ? []
-        : await this.probeSubtitleTracks(filePath);
+      stats.size > options.fileTooLargeBytes;
+    let subtitleTracks: SubtitleTrack[];
+    if (tooBig) {
+      subtitleTracks = [];
+    } else {
+      subtitleTracks = await this.probeSubtitleTracksCached(
+        filePath,
+        stats.mtimeMs,
+      );
+    }
     const externalSubtitles = await this.findExternalSubtitles(
       filePath,
       options.directoryEntriesCache,
@@ -342,6 +390,23 @@ export class LibraryService implements OnModuleInit {
     }
 
     return 'unknown';
+  }
+
+  private async probeSubtitleTracksCached(
+    filePath: string,
+    mtimeMs: number,
+  ): Promise<SubtitleTrack[]> {
+    const cached = await this.probeCacheRepo.findOne({ where: { path: filePath } });
+    if (cached && cached.mtimeMs === mtimeMs) {
+      return JSON.parse(cached.tracksJson) as SubtitleTrack[];
+    }
+    const tracks = await this.probeSubtitleTracks(filePath);
+    await this.probeCacheRepo.save({
+      path: filePath,
+      mtimeMs,
+      tracksJson: JSON.stringify(tracks),
+    });
+    return tracks;
   }
 
   private async probeSubtitleTracks(

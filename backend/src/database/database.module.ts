@@ -8,8 +8,10 @@ import { SettingEntity } from './entities/setting.entity';
 import { TokenUsageRowEntity } from './entities/token-usage-row.entity';
 import { JobSnapshotEntity } from './entities/job-snapshot.entity';
 import { JobLogRowEntity } from './entities/job-log.entity';
+import { ProbeCacheEntity } from './entities/probe-cache.entity';
 import { LegacyImportService } from './legacy-import.service';
 import { InitialSchema1738700000000 } from '../migrations/1738700000000-InitialSchema';
+import { AddProbeCache1738700000001 } from '../migrations/1738700000001-AddProbeCache';
 
 @Module({
   imports: [
@@ -35,8 +37,9 @@ import { InitialSchema1738700000000 } from '../migrations/1738700000000-InitialS
             TokenUsageRowEntity,
             JobSnapshotEntity,
             JobLogRowEntity,
+            ProbeCacheEntity,
           ],
-          migrations: [InitialSchema1738700000000],
+          migrations: [InitialSchema1738700000000, AddProbeCache1738700000001],
           migrationsRun: true,
           synchronize: false,
           logging: false,
