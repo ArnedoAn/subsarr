@@ -112,3 +112,16 @@ frontend/out/
 data/
 nul
 .sisyphus/plans/translation-verification.md
+
+# Agent scaffolding
+.superpowers/
+AGENTS.md
+backend/AGENTS.md
+frontend/AGENTS.md
+CLAUDE.md
+
+# pnpm
+pnpm-debug.log*
+
+# npm lockfiles (replaced by pnpm-lock.yaml)
+package-lock.json

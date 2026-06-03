@@ -9,7 +9,10 @@ export interface FailedLine {
     | 'identical_to_source'
     | 'wrong_language'
     | 'encoding_issues'
-    | 'empty_translation';
+    | 'empty_translation'
+    | 'missing_segments'
+    | 'structure_changed'
+    | 'partial_translation';
   detectedLanguage?: string;
   confidence: number;
 }
@@ -19,6 +22,13 @@ export interface VerificationResult {
   passedLines: number;
   failedLines: FailedLine[];
   successRate: number;
+}
+
+export type SubtitleFormat = 'srt' | 'ass';
+
+export interface VerificationOptions {
+  subtitleFormat?: SubtitleFormat;
+  semanticChecksEnabled?: boolean;
 }
 
 const LANG_CODE_MAP: Record<string, string[]> = {
@@ -93,7 +103,7 @@ const LANG_CODE_MAP: Record<string, string[]> = {
   ca: ['cat'],
 };
 
-const ENCODING_ISSUES_RE = /[\uFFFD\u0000]/;
+const ENCODING_ISSUES_RE = /[\uFFFD]/;
 const NON_TRANSLATABLE_RE = /^[\d\s\W]+$/;
 
 @Injectable()
@@ -105,9 +115,11 @@ export class TranslationVerificationService {
     translatedLines: string[],
     sourceLanguage: string,
     targetLanguage: string,
+    options?: VerificationOptions,
   ): VerificationResult {
     const failedLines: FailedLine[] = [];
     const targetCodes = this.resolveLanguageCodes(targetLanguage);
+    const semanticChecksEnabled = options?.semanticChecksEnabled ?? true;
 
     for (let i = 0; i < sourceLines.length; i++) {
       const source = sourceLines[i];
@@ -124,7 +136,7 @@ export class TranslationVerificationService {
         continue;
       }
 
-      if (ENCODING_ISSUES_RE.test(translated)) {
+      if (ENCODING_ISSUES_RE.test(translated) || translated.includes('\0')) {
         failedLines.push({
           index: i,
           sourceText: source,
@@ -132,6 +144,25 @@ export class TranslationVerificationService {
           reason: 'encoding_issues',
           confidence: 1,
         });
+        continue;
+      }
+
+      const structuralFailure = this.verifyStructure(
+        source,
+        translated,
+        options?.subtitleFormat,
+      );
+      if (structuralFailure) {
+        failedLines.push({
+          index: i,
+          sourceText: source,
+          translatedText: translated,
+          ...structuralFailure,
+        });
+        continue;
+      }
+
+      if (!semanticChecksEnabled) {
         continue;
       }
 
@@ -213,5 +244,89 @@ export class TranslationVerificationService {
   private resolveLanguageCodes(language: string): string[] {
     const key = language.toLowerCase();
     return LANG_CODE_MAP[key] ?? [key];
+  }
+
+  private verifyStructure(
+    source: string,
+    translated: string,
+    subtitleFormat?: SubtitleFormat,
+  ): Pick<FailedLine, 'reason' | 'confidence'> | null {
+    if (!subtitleFormat) {
+      return null;
+    }
+
+    if (subtitleFormat === 'srt') {
+      const sourceBreaks = this.countMatches(source, /\n/g);
+      const translatedBreaks = this.countMatches(translated, /\n/g);
+      if (sourceBreaks > translatedBreaks) {
+        return { reason: 'missing_segments', confidence: 0.95 };
+      }
+    }
+
+    if (subtitleFormat === 'ass') {
+      const sourceBreaks = this.countMatches(source, /\\[Nn]/g);
+      const translatedBreaks = this.countMatches(translated, /\\[Nn]/g);
+      if (sourceBreaks !== translatedBreaks) {
+        return { reason: 'structure_changed', confidence: 0.95 };
+      }
+
+      const sourceTags = source.match(/\{[^}]*\}/g) ?? [];
+      const translatedTags = translated.match(/\{[^}]*\}/g) ?? [];
+      if (!this.sameMultiset(sourceTags, translatedTags)) {
+        return { reason: 'structure_changed', confidence: 0.95 };
+      }
+    }
+
+    const sourceText = this.stripSubtitleMarkup(source, subtitleFormat);
+    const translatedText = this.stripSubtitleMarkup(translated, subtitleFormat);
+    if (
+      sourceText.length >= 40 &&
+      translatedText.length > 0 &&
+      translatedText.length < Math.floor(sourceText.length * 0.25)
+    ) {
+      return { reason: 'partial_translation', confidence: 0.65 };
+    }
+
+    return null;
+  }
+
+  private countMatches(value: string, pattern: RegExp): number {
+    return value.match(pattern)?.length ?? 0;
+  }
+
+  private sameMultiset(left: string[], right: string[]): boolean {
+    if (left.length !== right.length) {
+      return false;
+    }
+
+    const counts = new Map<string, number>();
+    for (const item of left) {
+      counts.set(item, (counts.get(item) ?? 0) + 1);
+    }
+    for (const item of right) {
+      const next = (counts.get(item) ?? 0) - 1;
+      if (next < 0) {
+        return false;
+      }
+      if (next === 0) {
+        counts.delete(item);
+      } else {
+        counts.set(item, next);
+      }
+    }
+    return counts.size === 0;
+  }
+
+  private stripSubtitleMarkup(
+    value: string,
+    subtitleFormat: SubtitleFormat,
+  ): string {
+    if (subtitleFormat === 'ass') {
+      return value
+        .replace(/\{[^}]*\}/g, '')
+        .replace(/\\[Nn]/g, ' ')
+        .trim();
+    }
+    return value.trim();
   }
 }

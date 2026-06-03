@@ -68,7 +68,7 @@ export class TranslationJobProcessor {
 
     let lastTranslatingProgress = 25;
     let lastTranslatingMessage = '';
-    let lastTranslatingDetails: any = undefined;
+    let lastTranslatingDetails: unknown = undefined;
 
     let lastPersistedFree = {
       promptTokens: 0,
@@ -131,7 +131,7 @@ export class TranslationJobProcessor {
         | 'failed',
       progressPercent: number,
       message: string,
-      details?: any,
+      details?: unknown,
       tokenUsage?: JobProgressTokenUsage,
     ) => {
       this.jobsEventsService.publish(jobId, {
@@ -253,6 +253,7 @@ export class TranslationJobProcessor {
             provider: job.data.provider,
             sourceLanguage: job.data.sourceLanguage,
             verificationEnabled: settings.translationVerificationEnabled,
+            subtitleFormat: 'ass',
             onVerificationPhase: async (info) => {
               const progressPercent = info.phase === 'validating' ? 91 : 93;
               await publish(
@@ -431,6 +432,7 @@ export class TranslationJobProcessor {
           provider: job.data.provider,
           sourceLanguage: job.data.sourceLanguage,
           verificationEnabled: settings.translationVerificationEnabled,
+          subtitleFormat: 'srt',
           onVerificationPhase: async (info) => {
             const progressPercent = info.phase === 'validating' ? 91 : 93;
             await publish(

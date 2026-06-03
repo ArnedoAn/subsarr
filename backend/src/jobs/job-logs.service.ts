@@ -13,7 +13,7 @@ export interface JobLogEntry {
   phase: string;
   message: string;
   timestamp: string;
-  details?: Record<string, string | number | boolean | null>;
+  details?: unknown;
 }
 
 export interface LogsQuery {
@@ -36,10 +36,7 @@ function rowToEntry(row: JobLogRowEntity): JobLogEntry {
     message: row.message,
     timestamp: row.timestamp,
     details: row.detailsJson
-      ? (JSON.parse(row.detailsJson) as Record<
-          string,
-          string | number | boolean | null
-        >)
+      ? (JSON.parse(row.detailsJson) as unknown)
       : undefined,
   };
 }

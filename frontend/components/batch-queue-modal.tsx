@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiPost } from '@/lib/api';
 import { COMMON_LANGUAGES } from '@/lib/languages';
+import { LanguageCombobox } from '@/components/language-combobox';
+import { pushRecentLanguage } from '@/lib/recent-languages';
 import {
   type BatchEnqueueResultItem,
   type BatchPreviewRow,
@@ -82,6 +84,30 @@ function inferUniversalSourceLanguage(items: MediaItem[]): string | null {
   return [...common].sort()[0];
 }
 
+function GroupCheckbox({
+  allChecked,
+  someChecked,
+  onChange,
+}: {
+  allChecked: boolean;
+  someChecked: boolean;
+  onChange: () => void;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = someChecked;
+  }, [someChecked]);
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      checked={allChecked}
+      onChange={onChange}
+      className="h-3.5 w-3.5 accent-primary rounded flex-shrink-0"
+    />
+  );
+}
+
 const STATUS_LABEL: Record<BatchPreviewRow['status'], string> = {
   ready: 'Listo',
   no_source_track: 'Sin pista origen',
@@ -127,6 +153,8 @@ export function BatchQueueModal({
   const [lotIncluded, setLotIncluded] = useState<Record<string, boolean>>({});
   const [enqueuing, setEnqueuing] = useState(false);
   const [lastEnqueueErrors, setLastEnqueueErrors] = useState<string[]>([]);
+  const [itemQuery, setItemQuery] = useState('');
+  const [collapsedFolders, setCollapsedFolders] = useState<Record<string, boolean>>({});
   const selectAllReadyRef = useRef<HTMLInputElement>(null);
 
   const itemById = useMemo(() => {
@@ -152,6 +180,16 @@ export function BatchQueueModal({
       setPreviewError(null);
       setIncludedReady({});
       setLastEnqueueErrors([]);
+      setItemQuery('');
+      // collapse by default when many items
+      const initCollapsed: Record<string, boolean> = {};
+      if (items.length > 50) {
+        for (const it of items) {
+          const folder = parentDir(it.path);
+          initCollapsed[folder] = true;
+        }
+      }
+      setCollapsedFolders(initCollapsed);
     }
   }, [open, initialSource, initialTarget, initialProvider, items]);
 
@@ -370,6 +408,10 @@ export function BatchQueueModal({
         return `${name}: ${r.error ?? 'Unknown error'}`;
       });
       setLastEnqueueErrors(errors);
+      if (queued > 0) {
+        pushRecentLanguage(sourceLanguage);
+        pushRecentLanguage(targetLanguage);
+      }
       onEnqueued?.({
         queued,
         failed: failed.length,
@@ -461,55 +503,131 @@ export function BatchQueueModal({
                 </button>
               </div>
             </div>
-            <ul className="max-h-36 overflow-y-auto custom-scrollbar divide-y divide-outline-variant/10">
-              {items.map(it => (
-                <li
-                  key={it.id}
-                  className="flex items-center gap-2.5 px-3 py-2 hover:bg-surface-container-high/60"
-                >
-                  <input
-                    type="checkbox"
-                    checked={lotIncluded[it.id] !== false}
-                    onChange={() => toggleLotItem(it.id)}
-                    className="h-3.5 w-3.5 accent-primary rounded flex-shrink-0"
-                    aria-label={`Incluir ${it.name}`}
-                  />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-xs font-medium text-on-surface truncate">
-                      {it.name}
-                    </p>
-                    <p
-                      className="text-[10px] font-mono text-on-surface-variant truncate"
-                      title={it.path}
-                    >
-                      {parentDir(it.path)}
-                    </p>
-                  </div>
-                </li>
-              ))}
-            </ul>
+            {/* Search */}
+            <div className="px-3 py-2 border-b border-outline-variant/10">
+              <div className="relative">
+                <span className="material-symbols-outlined absolute left-2 top-1/2 -translate-y-1/2 text-[13px] text-on-surface-variant pointer-events-none">search</span>
+                <input
+                  type="text"
+                  value={itemQuery}
+                  onChange={(e) => setItemQuery(e.target.value)}
+                  placeholder="Filtrar archivos…"
+                  className="w-full engraved-input text-xs px-2 py-1.5 pl-6"
+                />
+                {itemQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setItemQuery('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-on-surface-variant hover:text-on-surface"
+                  >
+                    <span className="material-symbols-outlined text-[13px]">close</span>
+                  </button>
+                )}
+              </div>
+            </div>
+            {/* Grouped items */}
+            <div className="max-h-48 overflow-y-auto custom-scrollbar">
+              {(() => {
+                const q = itemQuery.toLowerCase();
+                const visibleItems = q
+                  ? items.filter((it) => it.name.toLowerCase().includes(q) || it.path.toLowerCase().includes(q))
+                  : items;
+
+                const groups = new Map<string, typeof items>();
+                for (const it of visibleItems) {
+                  const folder = parentDir(it.path);
+                  if (!groups.has(folder)) groups.set(folder, []);
+                  groups.get(folder)!.push(it);
+                }
+
+                if (groups.size === 0) {
+                  return (
+                    <p className="px-3 py-4 text-xs text-center text-on-surface-variant">Sin resultados</p>
+                  );
+                }
+
+                return Array.from(groups.entries()).map(([folder, folderItems]) => {
+                  const isCollapsed = collapsedFolders[folder] ?? false;
+                  const checkedCount = folderItems.filter((it) => lotIncluded[it.id] !== false).length;
+                  const allChecked = checkedCount === folderItems.length;
+                  const someChecked = checkedCount > 0 && checkedCount < folderItems.length;
+
+                  const toggleGroupFolder = () => {
+                    setCollapsedFolders((prev) => ({ ...prev, [folder]: !prev[folder] }));
+                  };
+
+                  const toggleGroupSelection = () => {
+                    const shouldCheck = !allChecked;
+                    setLotIncluded((prev) => {
+                      const next = { ...prev };
+                      for (const it of folderItems) next[it.id] = shouldCheck;
+                      return next;
+                    });
+                  };
+
+                  return (
+                    <div key={folder}>
+                      {/* Group header */}
+                      <div className="flex items-center gap-2 px-3 py-1.5 bg-surface-container-low/60 border-b border-outline-variant/10 sticky top-0">
+                        <GroupCheckbox
+                          allChecked={allChecked}
+                          someChecked={someChecked}
+                          onChange={toggleGroupSelection}
+                        />
+                        <button
+                          type="button"
+                          onClick={toggleGroupFolder}
+                          className="flex items-center gap-1.5 flex-1 min-w-0 text-left"
+                        >
+                          <span className="material-symbols-outlined text-[13px] text-on-surface-variant">
+                            {isCollapsed ? 'chevron_right' : 'expand_more'}
+                          </span>
+                          <span className="material-symbols-outlined text-[13px] text-primary">folder</span>
+                          <span className="text-[11px] font-mono text-on-surface truncate flex-1">
+                            {folder || '/'}
+                          </span>
+                          <span className="text-[10px] text-on-surface-variant flex-shrink-0 ml-1">
+                            {checkedCount}/{folderItems.length}
+                          </span>
+                        </button>
+                      </div>
+                      {!isCollapsed && (
+                        <ul className="divide-y divide-outline-variant/10">
+                          {folderItems.map((it) => (
+                            <li
+                              key={it.id}
+                              className="flex items-center gap-2.5 px-3 py-2 pl-8 hover:bg-surface-container-high/60"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={lotIncluded[it.id] !== false}
+                                onChange={() => toggleLotItem(it.id)}
+                                className="h-3.5 w-3.5 accent-primary rounded flex-shrink-0"
+                                aria-label={`Incluir ${it.name}`}
+                              />
+                              <p className="text-xs font-medium text-on-surface truncate">
+                                {it.name}
+                              </p>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  );
+                });
+              })()}
+            </div>
           </div>
 
           {/* Opciones globales */}
           <div className="grid sm:grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <label className="field-label">Idioma origen</label>
-              <div className="relative">
-                <select
-                  value={sourceLanguage}
-                  onChange={e => setSourceLanguage(e.target.value)}
-                  className="w-full engraved-input text-sm px-3 py-2.5 pr-8 appearance-none cursor-pointer"
-                >
-                  {COMMON_LANGUAGES.map(l => (
-                    <option key={l.code} value={l.code}>
-                      {l.name} ({l.code})
-                    </option>
-                  ))}
-                </select>
-                <span className="material-symbols-outlined absolute right-2.5 top-1/2 -translate-y-1/2 text-[16px] text-on-surface-variant pointer-events-none">
-                  expand_more
-                </span>
-              </div>
+              <LanguageCombobox
+                value={sourceLanguage}
+                onChange={setSourceLanguage}
+                ariaLabel="Idioma origen"
+              />
               {inferredCommonSource !== null &&
                 sourceLanguage === inferredCommonSource && (
                   <p className="text-[10px] text-on-surface-variant leading-snug">
@@ -519,22 +637,11 @@ export function BatchQueueModal({
             </div>
             <div className="space-y-1.5">
               <label className="field-label">Idioma destino</label>
-              <div className="relative">
-                <select
-                  value={targetLanguage}
-                  onChange={e => setTargetLanguage(e.target.value)}
-                  className="w-full engraved-input text-sm px-3 py-2.5 pr-8 appearance-none cursor-pointer"
-                >
-                  {COMMON_LANGUAGES.map(l => (
-                    <option key={l.code} value={l.code}>
-                      {l.name} ({l.code})
-                    </option>
-                  ))}
-                </select>
-                <span className="material-symbols-outlined absolute right-2.5 top-1/2 -translate-y-1/2 text-[16px] text-on-surface-variant pointer-events-none">
-                  expand_more
-                </span>
-              </div>
+              <LanguageCombobox
+                value={targetLanguage}
+                onChange={setTargetLanguage}
+                ariaLabel="Idioma destino"
+              />
             </div>
           </div>
 
@@ -696,6 +803,27 @@ export function BatchQueueModal({
                   </button>
                 </div>
 
+                {/* Preview search */}
+                <div className="relative">
+                  <span className="material-symbols-outlined absolute left-2 top-1/2 -translate-y-1/2 text-[13px] text-on-surface-variant pointer-events-none">search</span>
+                  <input
+                    type="text"
+                    value={itemQuery}
+                    onChange={(e) => setItemQuery(e.target.value)}
+                    placeholder="Filtrar resultados…"
+                    className="w-full engraved-input text-xs px-2 py-1.5 pl-6"
+                  />
+                  {itemQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setItemQuery('')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-on-surface-variant hover:text-on-surface"
+                    >
+                      <span className="material-symbols-outlined text-[13px]">close</span>
+                    </button>
+                  )}
+                </div>
+
                 <div className="border border-outline-variant/20 rounded-lg max-h-[280px] overflow-auto custom-scrollbar bg-surface-container">
                   <table className="w-full text-xs data-table min-w-[520px]">
                     <thead className="sticky top-0 z-[1]">
@@ -720,63 +848,73 @@ export function BatchQueueModal({
                       </tr>
                     </thead>
                     <tbody>
-                      {previewRows.map(row => {
-                        const it = itemById.get(row.mediaItemId);
-                        const isReady = row.status === 'ready';
-                        return (
-                          <tr
-                            key={row.mediaItemId}
-                            className="border-b border-outline-variant/10"
-                          >
-                            <td className="px-2 py-2">
-                              {isReady ? (
-                                <input
-                                  type="checkbox"
-                                  checked={Boolean(
-                                    includedReady[row.mediaItemId],
-                                  )}
-                                  onChange={() => toggleReady(row.mediaItemId)}
-                                  className="h-3.5 w-3.5 accent-primary rounded"
-                                />
-                              ) : (
-                                <span className="text-on-surface-variant/40">
-                                  —
-                                </span>
-                              )}
-                            </td>
-                            <td className="px-2 py-2 max-w-[200px]">
-                              <div className="font-medium text-on-surface truncate">
-                                {it?.name ?? row.mediaItemId.slice(0, 8)}
-                              </div>
-                              <div
-                                className="text-[10px] font-mono text-on-surface-variant truncate"
-                                title={it?.path}
-                              >
-                                {parentDir(it?.path ?? '')}
-                              </div>
-                            </td>
-                            <td className="px-2 py-2 whitespace-nowrap">
-                              <Badge
-                                variant={
-                                  row.status === 'ready'
-                                    ? 'success'
-                                    : row.status === 'rule_blocked'
-                                      ? 'warning'
-                                      : 'error'
-                                }
-                              >
-                                {STATUS_LABEL[row.status]}
-                              </Badge>
-                            </td>
-                            <td className="px-2 py-2 text-on-surface-variant break-words max-w-[220px]">
-                              {row.reason ??
-                                (isReady
-                                  ? `pista #${row.sourceTrackIndex}`
-                                  : '—')}
-                            </td>
-                          </tr>
-                        );
-                      })}
+                      {previewRows
+                        .filter((row) => {
+                          if (!itemQuery) return true;
+                          const it = itemById.get(row.mediaItemId);
+                          const q = itemQuery.toLowerCase();
+                          return (
+                            (it?.name ?? '').toLowerCase().includes(q) ||
+                            (it?.path ?? '').toLowerCase().includes(q)
+                          );
+                        })
+                        .map(row => {
+                          const it = itemById.get(row.mediaItemId);
+                          const isReady = row.status === 'ready';
+                          return (
+                            <tr
+                              key={row.mediaItemId}
+                              className="border-b border-outline-variant/10"
+                            >
+                              <td className="px-2 py-2">
+                                {isReady ? (
+                                  <input
+                                    type="checkbox"
+                                    checked={Boolean(
+                                      includedReady[row.mediaItemId],
+                                    )}
+                                    onChange={() => toggleReady(row.mediaItemId)}
+                                    className="h-3.5 w-3.5 accent-primary rounded"
+                                  />
+                                ) : (
+                                  <span className="text-on-surface-variant/40">
+                                    —
+                                  </span>
+                                )}
+                              </td>
+                              <td className="px-2 py-2 max-w-[200px]">
+                                <div className="font-medium text-on-surface truncate">
+                                  {it?.name ?? row.mediaItemId.slice(0, 8)}
+                                </div>
+                                <div
+                                  className="text-[10px] font-mono text-on-surface-variant truncate"
+                                  title={it?.path}
+                                >
+                                  {parentDir(it?.path ?? '')}
+                                </div>
+                              </td>
+                              <td className="px-2 py-2 whitespace-nowrap">
+                                <Badge
+                                  variant={
+                                    row.status === 'ready'
+                                      ? 'success'
+                                      : row.status === 'rule_blocked'
+                                        ? 'warning'
+                                        : 'error'
+                                  }
+                                >
+                                  {STATUS_LABEL[row.status]}
+                                </Badge>
+                              </td>
+                              <td className="px-2 py-2 text-on-surface-variant break-words max-w-[220px]">
+                                {row.reason ??
+                                  (isReady
+                                    ? `pista #${row.sourceTrackIndex}`
+                                    : '—')}
+                              </td>
+                            </tr>
+                          );
+                        })}
                     </tbody>
                   </table>
                 </div>

@@ -41,7 +41,7 @@ export interface JobProgressEvent {
   progressPercent: number;
   message: string;
   timestamp: string;
-  details?: any;
+  details?: unknown;
   tokenUsage?: JobProgressTokenUsage;
 }
 
