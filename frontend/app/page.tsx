@@ -1079,31 +1079,23 @@ export default function LibraryPage() {
             </div>
 
             <div className="flex items-center gap-1.5">
-              <select
-                value={batchSource}
-                onChange={(e) => setBatchSource(e.target.value)}
-                className="engraved-input text-xs px-2 py-1.5 flex-1"
-                title="Source language"
-              >
-                {COMMON_LANGUAGES.map((l) => (
-                  <option key={l.code} value={l.code}>
-                    {l.code.toUpperCase()}
-                  </option>
-                ))}
-              </select>
+              <div className="flex-1">
+                <LanguageCombobox
+                  value={batchSource}
+                  onChange={setBatchSource}
+                  ariaLabel="Source language"
+                  compact
+                />
+              </div>
               <span className="material-symbols-outlined text-on-surface-variant text-[14px]">arrow_forward</span>
-              <select
-                value={batchTarget}
-                onChange={(e) => setBatchTarget(e.target.value)}
-                className="engraved-input text-xs px-2 py-1.5 flex-1"
-                title="Target language"
-              >
-                {COMMON_LANGUAGES.map((l) => (
-                  <option key={l.code} value={l.code}>
-                    {l.code.toUpperCase()}
-                  </option>
-                ))}
-              </select>
+              <div className="flex-1">
+                <LanguageCombobox
+                  value={batchTarget}
+                  onChange={setBatchTarget}
+                  ariaLabel="Target language"
+                  compact
+                />
+              </div>
               <select
                 value={batchProvider}
                 onChange={(e) => setBatchProvider(e.target.value as typeof batchProvider)}
