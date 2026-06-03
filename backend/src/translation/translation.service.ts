@@ -4,6 +4,7 @@ import type { ChatCompletion } from 'openai/resources';
 import {
   TranslationVerificationService,
   type FailedLine,
+  type SubtitleFormat,
 } from './translation-verification.service';
 import { SettingsService } from '../settings/settings.service';
 import { estimateDeepSeekCostUsd } from '../settings/deepseek-pricing';
@@ -57,7 +58,8 @@ export class TranslationService {
     tasks: (() => Promise<T>)[],
     concurrency: number,
   ): Promise<T[]> {
-    const results: T[] = new Array(tasks.length);
+    const results: T[] = [];
+    results.length = tasks.length;
     let i = 0;
 
     const worker = async () => {
@@ -68,9 +70,9 @@ export class TranslationService {
     };
 
     await Promise.all(
-      Array(Math.min(concurrency, tasks.length))
-        .fill(0)
-        .map(() => worker()),
+      Array.from({ length: Math.min(concurrency, tasks.length) }, () =>
+        worker(),
+      ),
     );
 
     return results;
@@ -89,20 +91,20 @@ export class TranslationService {
         phase: 'validating' | 'correcting';
         message: string;
         details?: any;
-      }) => void;
+      }) => void | Promise<void>;
       onVerificationSummary?: (info: {
         successRate: number;
         failedCount: number;
         totalLines: number;
         countsByReason: Record<string, number>;
-      }) => void;
+      }) => void | Promise<void>;
       onProgress?: (info: {
         batchIndex: number;
         totalBatches: number;
         progressPercent: number;
         message: string;
         details?: any;
-      }) => void;
+      }) => void | Promise<void>;
       /** Fires after each translation batch completes (serialized); includes cumulative totals. */
       onTokenUpdate?: (info: {
         promptTokens: number;
@@ -112,9 +114,10 @@ export class TranslationService {
         estimatedCostUsd: number;
         usageByTier: Record<TranslationTier, TranslationUsage>;
       }) => void | Promise<void>;
-      onLogFailedLine?: (line: FailedLine) => void;
+      onLogFailedLine?: (line: FailedLine) => void | Promise<void>;
       /** Extra system instructions (e.g. glossary). */
       glossaryHint?: string;
+      subtitleFormat?: SubtitleFormat;
     },
   ): Promise<TranslationResult> {
     const settings = await this.settingsService.getSettings();
@@ -190,7 +193,7 @@ export class TranslationService {
 
       tasks.push(async () => {
         if (options?.onProgress) {
-          options.onProgress({
+          await options.onProgress({
             batchIndex: currentBatchIndex,
             totalBatches,
             progressPercent: Math.floor(
@@ -210,6 +213,7 @@ export class TranslationService {
           options?.provider,
           llmModels,
           glossaryHint,
+          options?.subtitleFormat,
         );
 
         scheduleTokenUpdateFromBatch(result);
@@ -245,7 +249,11 @@ export class TranslationService {
     const completionTokens =
       usageByTier.free.completionTokens + usageByTier.paid.completionTokens;
 
-    if (!options?.verificationEnabled) {
+    const semanticChecksEnabled = options?.verificationEnabled ?? false;
+    const shouldVerify =
+      semanticChecksEnabled || Boolean(options?.subtitleFormat);
+
+    if (!shouldVerify) {
       return {
         lines: output,
         tierUsed,
@@ -258,9 +266,10 @@ export class TranslationService {
       };
     }
 
-    const sourceLanguage = options.sourceLanguage ?? 'eng';
-    if (options.onVerificationPhase) {
-      options.onVerificationPhase({
+    const verificationOptions = options ?? {};
+    const sourceLanguage = verificationOptions.sourceLanguage ?? 'eng';
+    if (verificationOptions.onVerificationPhase) {
+      await verificationOptions.onVerificationPhase({
         phase: 'validating',
         message: 'Validating translation',
         details: { totalLines: lines.length },
@@ -271,15 +280,19 @@ export class TranslationService {
       output,
       sourceLanguage,
       targetLanguage,
+      {
+        subtitleFormat: options?.subtitleFormat,
+        semanticChecksEnabled,
+      },
     );
 
-    if (options.onVerificationSummary) {
+    if (verificationOptions.onVerificationSummary) {
       const countsByReason: Record<string, number> = {};
       for (const failed of verification.failedLines) {
         countsByReason[failed.reason] =
           (countsByReason[failed.reason] ?? 0) + 1;
       }
-      options.onVerificationSummary({
+      await verificationOptions.onVerificationSummary({
         successRate: verification.successRate,
         failedCount: verification.failedLines.length,
         totalLines: lines.length,
@@ -302,8 +315,8 @@ export class TranslationService {
       const MAX_RETRIES_PER_LINE = 2;
       retriedLines = verification.failedLines.length;
 
-      if (options.onVerificationPhase) {
-        options.onVerificationPhase({
+      if (verificationOptions.onVerificationPhase) {
+        await verificationOptions.onVerificationPhase({
           phase: 'correcting',
           message: `Correcting ${verification.failedLines.length} failed line(s)`,
           details: { failedCount: verification.failedLines.length },
@@ -311,8 +324,8 @@ export class TranslationService {
       }
 
       for (const failed of verification.failedLines) {
-        if (options.onLogFailedLine) {
-          options.onLogFailedLine(failed);
+        if (verificationOptions.onLogFailedLine) {
+          await verificationOptions.onLogFailedLine(failed);
         }
 
         let retrySuccess = false;
@@ -327,9 +340,14 @@ export class TranslationService {
               targetLanguage,
               openRouterApiKey,
               deepSeekApiKey,
-              options.provider,
+              verificationOptions.provider,
               llmModels,
               glossaryHint,
+              verificationOptions.subtitleFormat,
+              this.buildCorrectionHint(
+                failed,
+                verificationOptions.subtitleFormat,
+              ),
             );
 
             if (singleResult.translated.length === 1) {
@@ -340,6 +358,10 @@ export class TranslationService {
                   [newTranslation],
                   sourceLanguage,
                   targetLanguage,
+                  {
+                    subtitleFormat: verificationOptions.subtitleFormat,
+                    semanticChecksEnabled,
+                  },
                 );
 
               if (singleVerification.failedLines.length === 0) {
@@ -413,6 +435,7 @@ export class TranslationService {
     provider: 'openrouter' | 'deepseek' | undefined,
     llmModels: { openRouter: string; deepSeek: string },
     glossaryHint: string,
+    subtitleFormat?: SubtitleFormat,
   ): Promise<BatchResult> {
     const firstAttempt = await this.callLLM(
       batch,
@@ -422,6 +445,7 @@ export class TranslationService {
       provider,
       llmModels,
       glossaryHint,
+      subtitleFormat,
     );
     if (this.isValidBatchLength(batch, firstAttempt.translated)) {
       return firstAttempt;
@@ -435,6 +459,7 @@ export class TranslationService {
       provider,
       llmModels,
       glossaryHint,
+      subtitleFormat,
     );
     if (this.isValidBatchLength(batch, retryAttempt.translated)) {
       return retryAttempt;
@@ -464,6 +489,8 @@ export class TranslationService {
     provider: 'openrouter' | 'deepseek' | undefined,
     llmModels: { openRouter: string; deepSeek: string },
     glossaryHint: string,
+    subtitleFormat?: SubtitleFormat,
+    correctionHint?: string,
   ): Promise<BatchResult> {
     if (provider === 'deepseek') {
       return await this.callDeepSeek(
@@ -472,6 +499,8 @@ export class TranslationService {
         deepSeekApiKey,
         llmModels.deepSeek,
         glossaryHint,
+        subtitleFormat,
+        correctionHint,
       );
     }
 
@@ -482,6 +511,8 @@ export class TranslationService {
         openRouterApiKey,
         llmModels.openRouter,
         glossaryHint,
+        subtitleFormat,
+        correctionHint,
       );
     } catch (error) {
       if (this.isExhaustedError(error)) {
@@ -494,6 +525,8 @@ export class TranslationService {
           deepSeekApiKey,
           llmModels.deepSeek,
           glossaryHint,
+          subtitleFormat,
+          correctionHint,
         );
       }
 
@@ -507,6 +540,8 @@ export class TranslationService {
     apiKey: string,
     model: string,
     glossaryHint: string,
+    subtitleFormat?: SubtitleFormat,
+    correctionHint?: string,
   ): Promise<BatchResult> {
     try {
       const httpResponse = await fetch(OPENROUTER_CHAT_URL, {
@@ -521,7 +556,12 @@ export class TranslationService {
           messages: [
             {
               role: 'system',
-              content: `${glossaryHint}Translate to ${targetLanguage}. Output strictly JSON object: {"data":["translated1",...]}. Keep exact array length.`,
+              content: this.buildSystemPrompt(
+                targetLanguage,
+                glossaryHint,
+                subtitleFormat,
+                correctionHint,
+              ),
             },
             {
               role: 'user',
@@ -547,7 +587,9 @@ export class TranslationService {
         const errDetail =
           typeof body.error === 'object' && body.error !== null
             ? JSON.stringify(body.error)
-            : String(body.error ?? rawText.slice(0, 400));
+            : typeof body.error === 'string'
+              ? body.error
+              : rawText.slice(0, 400);
         throw new Error(`OpenRouter HTTP ${httpResponse.status}: ${errDetail}`);
       }
 
@@ -595,6 +637,8 @@ export class TranslationService {
     apiKey: string,
     model: string,
     glossaryHint: string,
+    subtitleFormat?: SubtitleFormat,
+    correctionHint?: string,
   ): Promise<BatchResult> {
     const client = new OpenAI({
       baseURL: 'https://api.deepseek.com',
@@ -608,7 +652,12 @@ export class TranslationService {
       messages: [
         {
           role: 'system',
-          content: `${glossaryHint}Translate to ${targetLanguage}. Output strictly JSON object: {"data":["translated1",...]}. Keep exact array length.`,
+          content: this.buildSystemPrompt(
+            targetLanguage,
+            glossaryHint,
+            subtitleFormat,
+            correctionHint,
+          ),
         },
         {
           role: 'user',
@@ -644,10 +693,11 @@ export class TranslationService {
 
     let arrayData = parsed;
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const parsedRecord = parsed as Record<string, unknown>;
       arrayData =
-        (parsed as any).data ||
-        (parsed as any).translations ||
-        Object.values(parsed)[0];
+        parsedRecord.data ??
+        parsedRecord.translations ??
+        Object.values(parsedRecord)[0];
     }
 
     if (!Array.isArray(arrayData)) {
@@ -679,6 +729,38 @@ export class TranslationService {
 
   private isValidBatchLength(input: string[], translated: string[]): boolean {
     return translated.length === input.length;
+  }
+
+  private buildSystemPrompt(
+    targetLanguage: string,
+    glossaryHint: string,
+    subtitleFormat?: SubtitleFormat,
+    correctionHint?: string,
+  ): string {
+    const formatRules =
+      subtitleFormat === 'srt'
+        ? 'Preserve internal newline characters inside each subtitle cue. Do not merge, drop, split, or reorder cue segments.'
+        : subtitleFormat === 'ass'
+          ? 'Preserve ASS override tags like {\\i1} and line break markers like \\N exactly. Translate only human-readable dialogue text.'
+          : 'Do not merge, drop, split, or reorder input items.';
+
+    const correction = correctionHint ? `\n${correctionHint}` : '';
+
+    return `${glossaryHint}Translate to ${targetLanguage}. Output strictly JSON object: {"data":["translated1",...]}. Keep exact array length. ${formatRules}${correction}`;
+  }
+
+  private buildCorrectionHint(
+    failed: FailedLine,
+    subtitleFormat?: SubtitleFormat,
+  ): string {
+    const formatHint =
+      subtitleFormat === 'ass'
+        ? 'Keep every ASS tag and \\N marker from the source.'
+        : subtitleFormat === 'srt'
+          ? 'Keep the same internal newline structure as the source cue.'
+          : 'Keep the full source cue represented in one translated output item.';
+
+    return `Previous translation failed validation with reason "${failed.reason}". Re-translate the full cue completely. ${formatHint}`;
   }
 
   private isExhaustedError(error: unknown): boolean {

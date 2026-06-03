@@ -1,19 +1,60 @@
 import { Injectable, Logger } from '@nestjs/common';
-import * as fs from 'fs/promises';
-import { Dirent } from 'fs';
-import * as path from 'path';
+import { Dirent } from 'node:fs';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+
+export type RenameStatus = 'safe' | 'unchanged' | 'collision' | 'ambiguous';
+export type RenameMediaKind = 'episode' | 'movie' | 'unknown';
 
 export interface RenameVariation {
   id: string;
   label: string;
   newPath: string;
+  status: RenameStatus;
+  reason?: string;
 }
 
 export interface RenamePreviewItem {
   originalPath: string;
   originalName: string;
+  mediaKind: RenameMediaKind;
   variations: RenameVariation[];
 }
+
+export interface RenameError {
+  originalPath: string;
+  error: string;
+  code:
+    | 'duplicate_target'
+    | 'destination_exists'
+    | 'source_missing'
+    | 'rename_failed';
+}
+
+export interface RenameResult {
+  success: number;
+  failed: number;
+  errors: RenameError[];
+}
+
+interface ParsedEpisode {
+  kind: 'episode';
+  title: string;
+  season: number;
+  episode: number;
+  episodeTitle?: string;
+}
+
+interface ParsedMovie {
+  kind: 'movie';
+  title: string;
+  year: string;
+}
+
+type ParsedName =
+  | ParsedEpisode
+  | ParsedMovie
+  | { kind: 'unknown'; title: string };
 
 @Injectable()
 export class RenameService {
@@ -35,7 +76,7 @@ export class RenameService {
       let entries: Dirent[];
       try {
         entries = await fs.readdir(dir, { withFileTypes: true });
-      } catch (err) {
+      } catch {
         return;
       }
 
@@ -46,7 +87,7 @@ export class RenameService {
         } else if (entry.isFile()) {
           const ext = path.extname(entry.name).toLowerCase();
           if (this.allowedExtensions.has(ext)) {
-            const item = this.generateVariations(
+            const item = await this.generateVariations(
               fullPath,
               entry.name,
               dir,
@@ -71,92 +112,196 @@ export class RenameService {
     return results;
   }
 
-  private generateVariations(
+  private async generateVariations(
     fullPath: string,
     filename: string,
     dir: string,
     baseDir: string,
-  ): RenamePreviewItem | null {
+  ): Promise<RenamePreviewItem | null> {
     const ext = path.extname(filename);
     const basename = path.basename(filename, ext);
-
-    // Matchear formato de serie estilo Radarr/Sonarr
-    const showRegex =
-      /^(.*?)(?:\s+-\s+)?\bS(\d{1,2})E(\d{1,2})\b(?:[-\sA-Z0-9]*E\d{1,2})?(?:\s*-\s*(.*?))?$/i;
-    const tvMatch = basename.match(showRegex);
-
-    // Extraer año de las películas
-    const yearMatch = basename.match(/\b(19|20)\d{2}\b/);
-
     const variations: RenameVariation[] = [];
+    const parsed = this.parseName(basename, dir, baseDir);
 
-    if (tvMatch) {
-      const seriesTitleRaw =
-        tvMatch[1]?.trim() ||
-        this.extractTitleHintFromPath(dir, baseDir) ||
-        basename;
-      const seriesTitle =
-        this.cleanReleaseName(seriesTitleRaw) || seriesTitleRaw;
+    if (parsed.kind === 'episode') {
+      const s = parsed.season.toString().padStart(2, '0');
+      const e = parsed.episode.toString().padStart(2, '0');
 
-      const s = parseInt(tvMatch[2], 10).toString().padStart(2, '0');
-      const e = parseInt(tvMatch[3], 10).toString().padStart(2, '0');
+      let newNameDash = `${parsed.title} - S${s}E${e}`;
+      let newNameSpace = `${parsed.title} S${s}E${e}`;
 
-      const episodeTitleRaw = tvMatch[4] || '';
-      const episodeTitle = this.cleanReleaseName(episodeTitleRaw);
-
-      let newNameDash = `${seriesTitle} - S${s}E${e}`;
-      let newNameSpace = `${seriesTitle} S${s}E${e}`;
-
-      if (episodeTitle) {
-        newNameDash += ` - ${episodeTitle}`;
-        newNameSpace += ` - ${episodeTitle}`;
+      if (parsed.episodeTitle) {
+        newNameDash += ` - ${parsed.episodeTitle}`;
+        newNameSpace += ` - ${parsed.episodeTitle}`;
       }
 
-      variations.push({
-        id: 'series-dash',
-        label: episodeTitle
-          ? '{Title} - S{season:00}E{episode:00} - {EpisodeTitle}'
-          : '{Title} - S{season:00}E{episode:00}',
-        newPath: path.join(dir, `${newNameDash}${ext}`),
-      });
-      variations.push({
-        id: 'series-space',
-        label: episodeTitle
-          ? '{Title} S{season:00}E{episode:00} - {EpisodeTitle}'
-          : '{Title} S{season:00}E{episode:00}',
-        newPath: path.join(dir, `${newNameSpace}${ext}`),
-      });
-    } else if (yearMatch) {
-      const year = yearMatch[0];
-      const movieTitleRaw = basename.substring(0, yearMatch.index).trim();
-      let movieTitle = this.cleanReleaseName(movieTitleRaw);
-
-      if (!movieTitle)
-        movieTitle = this.extractTitleHintFromPath(dir, baseDir) || basename;
-
-      variations.push({
-        id: 'movie-parens',
-        label: '{Title} ({Year})',
-        newPath: path.join(dir, `${movieTitle} (${year})${ext}`),
-      });
-      variations.push({
-        id: 'movie-dash',
-        label: '{Title} - {Year}',
-        newPath: path.join(dir, `${movieTitle} - ${year}${ext}`),
-      });
+      variations.push(
+        await this.buildVariation(fullPath, dir, ext, {
+          id: 'series-dash',
+          label: parsed.episodeTitle
+            ? '{Title} - S{season:00}E{episode:00} - {EpisodeTitle}'
+            : '{Title} - S{season:00}E{episode:00}',
+          newName: newNameDash,
+        }),
+      );
+      variations.push(
+        await this.buildVariation(fullPath, dir, ext, {
+          id: 'series-space',
+          label: parsed.episodeTitle
+            ? '{Title} S{season:00}E{episode:00} - {EpisodeTitle}'
+            : '{Title} S{season:00}E{episode:00}',
+          newName: newNameSpace,
+        }),
+      );
+    } else if (parsed.kind === 'movie') {
+      variations.push(
+        await this.buildVariation(fullPath, dir, ext, {
+          id: 'movie-parens',
+          label: '{Title} ({Year})',
+          newName: `${parsed.title} (${parsed.year})`,
+        }),
+      );
+      variations.push(
+        await this.buildVariation(fullPath, dir, ext, {
+          id: 'movie-dash',
+          label: '{Title} - {Year}',
+          newName: `${parsed.title} - ${parsed.year}`,
+        }),
+      );
     } else {
-      const clean = this.cleanReleaseName(basename);
-      variations.push({
-        id: 'clean-name',
-        label: 'Clean release name',
-        newPath: path.join(dir, `${clean}${ext}`),
-      });
+      variations.push(
+        await this.buildVariation(fullPath, dir, ext, {
+          id: 'clean-name',
+          label: 'Clean release name',
+          newName: parsed.title,
+        }),
+      );
+    }
+
+    if (variations.some((variation) => variation.status === 'unchanged')) {
+      return null;
+    }
+
+    const actionable = variations.filter(
+      (variation) => variation.status !== 'unchanged',
+    );
+    if (actionable.length === 0) {
+      return null;
     }
 
     return {
       originalPath: fullPath,
       originalName: filename,
-      variations,
+      mediaKind: parsed.kind,
+      variations: actionable,
+    };
+  }
+
+  private parseName(
+    basename: string,
+    dir: string,
+    baseDir: string,
+  ): ParsedName {
+    const normalized = basename.replace(/[._]+/g, ' ').replace(/\s+/g, ' ');
+    const episodePatterns = [
+      /^(.*?)\bS(\d{1,2})\s*E(\d{1,3})(?:\s*E\d{1,3})?\b(.*)$/i,
+      /^(.*?)\b(\d{1,2})x(\d{1,3})\b(.*)$/i,
+      /^(.*?)\bSeason\s*(\d{1,2})\s*Episode\s*(\d{1,3})\b(.*)$/i,
+      /^Episode\s*(\d{1,3})\b(.*)$/i,
+    ];
+
+    for (const pattern of episodePatterns) {
+      const match = normalized.match(pattern);
+      if (!match) {
+        continue;
+      }
+
+      const pathHint = this.extractTitleHintFromPath(dir, baseDir);
+      const titleRaw = pattern.source.startsWith('^Episode')
+        ? pathHint
+        : match[1]?.trim() || pathHint || basename;
+      const season = pattern.source.startsWith('^Episode')
+        ? (this.extractSeasonHintFromPath(dir) ?? 1)
+        : Number.parseInt(match[2] ?? '1', 10);
+      const episode = Number.parseInt(
+        pattern.source.startsWith('^Episode')
+          ? (match[1] ?? '0')
+          : (match[3] ?? '0'),
+        10,
+      );
+      const episodeTitleRaw = pattern.source.startsWith('^Episode')
+        ? (match[2] ?? '')
+        : (match[4] ?? '');
+
+      return {
+        kind: 'episode',
+        title: this.cleanReleaseName(titleRaw) || titleRaw,
+        season,
+        episode,
+        episodeTitle: this.cleanEpisodeTitle(episodeTitleRaw),
+      };
+    }
+
+    const yearMatch = normalized.match(
+      /(?:^|[\s([])((?:19|20)\d{2})(?=$|[\s)\]])/,
+    );
+    if (yearMatch) {
+      const movieTitleRaw = normalized.slice(0, yearMatch.index).trim();
+      const movieTitle =
+        this.cleanReleaseName(movieTitleRaw) ||
+        this.extractTitleHintFromPath(dir, baseDir) ||
+        basename;
+      return {
+        kind: 'movie',
+        title: movieTitle,
+        year: yearMatch[1],
+      };
+    }
+
+    return {
+      kind: 'unknown',
+      title: this.cleanReleaseName(basename) || basename,
+    };
+  }
+
+  private async buildVariation(
+    originalPath: string,
+    dir: string,
+    ext: string,
+    input: { id: string; label: string; newName: string },
+  ): Promise<RenameVariation> {
+    const newPath = path.join(
+      dir,
+      `${this.sanitizeFilename(input.newName)}${ext}`,
+    );
+    const originalResolved = path.resolve(originalPath).toLowerCase();
+    const targetResolved = path.resolve(newPath).toLowerCase();
+
+    if (originalResolved === targetResolved) {
+      return {
+        id: input.id,
+        label: input.label,
+        newPath,
+        status: 'unchanged',
+        reason: 'Name is already normalized',
+      };
+    }
+
+    if (await this.pathExists(newPath)) {
+      return {
+        id: input.id,
+        label: input.label,
+        newPath,
+        status: 'collision',
+        reason: 'Destination already exists',
+      };
+    }
+
+    return {
+      id: input.id,
+      label: input.label,
+      newPath,
+      status: 'safe',
     };
   }
 
@@ -165,7 +310,8 @@ export class RenameService {
       return path.basename(dir);
     }
 
-    const parts = dir.replace(baseDir, '').split(path.sep).filter(Boolean);
+    const relative = path.relative(baseDir, dir);
+    const parts = relative.split(path.sep).filter(Boolean);
 
     for (const part of parts) {
       if (!/season\s*\d+/i.test(part)) {
@@ -175,12 +321,23 @@ export class RenameService {
     return path.basename(baseDir);
   }
 
+  private extractSeasonHintFromPath(dir: string): number | null {
+    const parts = dir.split(path.sep).reverse();
+    for (const part of parts) {
+      const match = part.match(/season\s*(\d{1,2})/i);
+      if (match) {
+        return Number.parseInt(match[1], 10);
+      }
+    }
+    return null;
+  }
+
   private cleanReleaseName(name: string): string {
     if (!name) return '';
     let cleaned = name;
 
     // 1. Puntos y guiones bajos a espacios
-    cleaned = cleaned.replace(/[\._]/g, ' ');
+    cleaned = cleaned.replace(/[._]/g, ' ');
 
     // 2. Metadatos entre corchetes
     cleaned = cleaned.replace(/\[.*?\]/g, '');
@@ -226,6 +383,12 @@ export class RenameService {
       'Castellano',
       'Subbed',
       'Dubbed',
+      'Proper',
+      'Repack',
+      'NF',
+      'AMZN',
+      'DSNP',
+      'MAX',
     ];
 
     const regex = new RegExp(`\\b(${qualityTokens.join('|')})\\b`, 'gi');
@@ -241,12 +404,42 @@ export class RenameService {
     return cleaned.trim();
   }
 
+  private cleanEpisodeTitle(name: string): string | undefined {
+    const cleaned = this.cleanReleaseName(name.replace(/^[-\s]+/, ''));
+    return cleaned || undefined;
+  }
+
+  private sanitizeFilename(name: string): string {
+    return name
+      .replace(/[<>:"/\\|?*]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  private async pathExists(filePath: string): Promise<boolean> {
+    try {
+      await fs.access(filePath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async executeRename(
     operations: { originalPath: string; newPath: string }[],
-  ): Promise<{ success: number; failed: number; errors: any[] }> {
+  ): Promise<RenameResult> {
+    const errors = await this.validateOperations(operations);
+    if (errors.length > 0) {
+      return {
+        success: 0,
+        failed: operations.length,
+        errors,
+      };
+    }
+
     let success = 0;
     let failed = 0;
-    const errors: any[] = [];
+    const executionErrors: RenameError[] = [];
 
     for (const op of operations) {
       try {
@@ -257,12 +450,67 @@ export class RenameService {
           await fs.rename(op.originalPath, op.newPath);
           success++;
         }
-      } catch (e: any) {
+      } catch (e: unknown) {
         failed++;
-        errors.push({ originalPath: op.originalPath, error: e.message });
+        executionErrors.push({
+          originalPath: op.originalPath,
+          error: e instanceof Error ? e.message : 'Rename failed',
+          code: 'rename_failed',
+        });
       }
     }
 
-    return { success, failed, errors };
+    return { success, failed, errors: executionErrors };
+  }
+
+  private async validateOperations(
+    operations: { originalPath: string; newPath: string }[],
+  ): Promise<RenameError[]> {
+    const errors: RenameError[] = [];
+    const targetCounts = new Map<string, number>();
+
+    for (const op of operations) {
+      const normalizedTarget = path.resolve(op.newPath).toLowerCase();
+      targetCounts.set(
+        normalizedTarget,
+        (targetCounts.get(normalizedTarget) ?? 0) + 1,
+      );
+    }
+
+    for (const op of operations) {
+      const normalizedSource = path.resolve(op.originalPath).toLowerCase();
+      const normalizedTarget = path.resolve(op.newPath).toLowerCase();
+
+      if ((targetCounts.get(normalizedTarget) ?? 0) > 1) {
+        errors.push({
+          originalPath: op.originalPath,
+          error: 'Duplicate target path in rename batch',
+          code: 'duplicate_target',
+        });
+        continue;
+      }
+
+      if (!(await this.pathExists(op.originalPath))) {
+        errors.push({
+          originalPath: op.originalPath,
+          error: 'Source file does not exist',
+          code: 'source_missing',
+        });
+        continue;
+      }
+
+      if (
+        normalizedSource !== normalizedTarget &&
+        (await this.pathExists(op.newPath))
+      ) {
+        errors.push({
+          originalPath: op.originalPath,
+          error: 'Destination already exists',
+          code: 'destination_exists',
+        });
+      }
+    }
+
+    return errors;
   }
 }
