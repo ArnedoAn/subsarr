@@ -9,8 +9,9 @@ import {
   type MediaItemWithRuleStatus,
   type SettingsPayload,
 } from '@/lib/types';
-import { COMMON_LANGUAGES } from '@/lib/languages';
 import { BatchQueueModal } from '@/components/batch-queue-modal';
+import { LanguageCombobox } from '@/components/language-combobox';
+import { Combobox } from '@/components/ui/combobox';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -108,6 +109,18 @@ export default function LibraryPage() {
     return Array.from(dirs).sort();
   }, [items]);
 
+  const folderOptions = useMemo(
+    () => [
+      { value: 'all', label: 'All folders' },
+      ...folders.map((f) => ({
+        value: f,
+        label: f.split('/').slice(-2).join('/'),
+        hint: f,
+      })),
+    ],
+    [folders],
+  );
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -122,9 +135,12 @@ export default function LibraryPage() {
       ]);
       setItems(itemsRes);
       if (settingsRes && !restoredFromCacheRef.current) {
-        setBatchSource(settingsRes.sourceLanguage);
-        setBatchTarget(settingsRes.targetLanguage);
-        setTargetLangFilter(settingsRes.targetLanguage);
+        setBatchSource(settingsRes.sourceLanguage || 'eng');
+        const target = settingsRes.targetLanguage && settingsRes.targetLanguage !== 'und'
+          ? settingsRes.targetLanguage
+          : 'eng';
+        setBatchTarget(target);
+        setTargetLangFilter(target);
       }
     } catch (err) {
       toastError(err instanceof Error ? err.message : 'Failed to load library');
@@ -359,18 +375,15 @@ export default function LibraryPage() {
               </div>
 
               {/* Folder */}
-              <div className="relative sm:col-span-2 lg:col-span-1">
-                <select
+              <div className="sm:col-span-2 lg:col-span-1">
+                <Combobox
                   value={folderFilter}
-                  onChange={e => { setFolderFilter(e.target.value); setCurrentPage(1); }}
-                  className="w-full engraved-input text-sm px-3 py-2 pr-8 appearance-none cursor-pointer"
-                >
-                  <option value="all">All Folders</option>
-                  {folders.map(f => (
-                    <option key={f} value={f} title={f}>{f.split('/').slice(-2).join('/')}</option>
-                  ))}
-                </select>
-                <span className="material-symbols-outlined absolute right-2.5 top-1/2 -translate-y-1/2 text-on-surface-variant text-[16px] pointer-events-none">folder</span>
+                  onChange={(v) => { setFolderFilter(v); setCurrentPage(1); }}
+                  options={folderOptions}
+                  placeholder="Search folder…"
+                  emptyLabel="No matching folder"
+                  ariaLabel="Filter by folder"
+                />
               </div>
 
               {/* Status */}
@@ -635,23 +648,19 @@ export default function LibraryPage() {
             {/* Language + Provider selectors */}
             <div className="flex items-center gap-2 flex-wrap flex-1">
               <div className="flex items-center gap-1.5 bg-surface-container rounded-md px-2 py-1.5 border border-outline-variant/30">
-                <select
+                <LanguageCombobox
                   value={batchSource}
-                  onChange={e => setBatchSource(e.target.value)}
-                  className="bg-transparent text-xs text-on-surface cursor-pointer focus:outline-none"
-                  title="Source Language"
-                >
-                  {COMMON_LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.code.toUpperCase()}</option>)}
-                </select>
+                  onChange={setBatchSource}
+                  ariaLabel="Source Language"
+                  compact
+                />
                 <span className="material-symbols-outlined text-on-surface-variant text-[14px]">arrow_forward</span>
-                <select
+                <LanguageCombobox
                   value={batchTarget}
-                  onChange={e => setBatchTarget(e.target.value)}
-                  className="bg-transparent text-xs text-on-surface cursor-pointer focus:outline-none"
-                  title="Target Language"
-                >
-                  {COMMON_LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.code.toUpperCase()}</option>)}
-                </select>
+                  onChange={setBatchTarget}
+                  ariaLabel="Target Language"
+                  compact
+                />
               </div>
               <div className="relative">
                 <select

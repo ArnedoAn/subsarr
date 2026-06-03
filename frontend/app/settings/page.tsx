@@ -4,7 +4,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { apiGet, apiPost, apiPut } from '@/lib/api';
 import { type RuleDefinition, type SettingsPayload } from '@/lib/types';
 import { PathBrowser } from '@/components/path-browser';
-import { COMMON_LANGUAGES } from '@/lib/languages';
+import { LanguageCombobox } from '@/components/language-combobox';
+import { pushRecentLanguage } from '@/lib/recent-languages';
 import { Button } from '@/components/ui/button';
 import { Toggle } from '@/components/ui/toggle';
 import { useToast } from '@/components/ui/toast';
@@ -137,6 +138,8 @@ export default function SettingsPage() {
       setDeepSeekKey('');
       setTelegramToken('');
       setJellyfinKey('');
+      pushRecentLanguage(settings.sourceLanguage);
+      pushRecentLanguage(settings.targetLanguage);
       success('Settings saved successfully');
       await load();
     } catch (err) {
@@ -267,33 +270,19 @@ export default function SettingsPage() {
                 <div className="grid sm:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
                     <label className="field-label">Source Language</label>
-                    <div className="relative">
-                      <select
-                        value={settings.sourceLanguage}
-                        onChange={e => setSettings({ ...settings, sourceLanguage: e.target.value })}
-                        className="w-full engraved-input text-sm px-3 py-2.5 pr-8 appearance-none cursor-pointer"
-                      >
-                        {COMMON_LANGUAGES.map(l => (
-                          <option key={l.code} value={l.code}>{l.name} ({l.code})</option>
-                        ))}
-                      </select>
-                      <span className="material-symbols-outlined absolute right-2.5 top-1/2 -translate-y-1/2 text-[16px] text-on-surface-variant pointer-events-none">expand_more</span>
-                    </div>
+                    <LanguageCombobox
+                      value={settings.sourceLanguage || 'eng'}
+                      onChange={(v) => setSettings({ ...settings, sourceLanguage: v })}
+                      ariaLabel="Source Language"
+                    />
                   </div>
                   <div className="space-y-1.5">
                     <label className="field-label">Target Language</label>
-                    <div className="relative">
-                      <select
-                        value={settings.targetLanguage}
-                        onChange={e => setSettings({ ...settings, targetLanguage: e.target.value })}
-                        className="w-full engraved-input text-sm px-3 py-2.5 pr-8 appearance-none cursor-pointer"
-                      >
-                        {COMMON_LANGUAGES.map(l => (
-                          <option key={l.code} value={l.code}>{l.name} ({l.code})</option>
-                        ))}
-                      </select>
-                      <span className="material-symbols-outlined absolute right-2.5 top-1/2 -translate-y-1/2 text-[16px] text-on-surface-variant pointer-events-none">expand_more</span>
-                    </div>
+                    <LanguageCombobox
+                      value={settings.targetLanguage && settings.targetLanguage !== 'und' ? settings.targetLanguage : 'eng'}
+                      onChange={(v) => setSettings({ ...settings, targetLanguage: v })}
+                      ariaLabel="Target Language"
+                    />
                   </div>
                 </div>
 
