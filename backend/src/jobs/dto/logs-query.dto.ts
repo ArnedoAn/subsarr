@@ -20,6 +20,10 @@ export class LogsQueryDto {
 
   @IsOptional()
   @IsString()
+  q?: string;
+
+  @IsOptional()
+  @IsString()
   search?: string;
 
   @IsOptional()
@@ -40,4 +44,10 @@ export class LogsQueryDto {
   @Min(1)
   @Max(500)
   limit?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  offset?: number;
 }

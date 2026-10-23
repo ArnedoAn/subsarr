@@ -7,10 +7,11 @@ import { RulesModule } from '../rules/rules.module';
 import { OutputModule } from '../output/output.module';
 import { ExtractionModule } from '../extraction/extraction.module';
 import { ProbeCacheEntity } from '../database/entities/probe-cache.entity';
+import { MediaInventoryEntity } from '../database/entities/media-inventory.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([ProbeCacheEntity]),
+    TypeOrmModule.forFeature([ProbeCacheEntity, MediaInventoryEntity]),
     forwardRef(() => SettingsModule),
     forwardRef(() => RulesModule),
     OutputModule,

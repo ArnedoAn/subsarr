@@ -6,7 +6,6 @@ import {
   Param,
   Post,
   Query,
-  Logger,
 } from '@nestjs/common';
 import { IsOptional, IsString } from 'class-validator';
 import { promises as fs } from 'node:fs';
@@ -34,8 +33,6 @@ class LibraryItemQueryDto {
 
 @Controller('library')
 export class LibraryController {
-  private readonly logger = new Logger(LibraryController.name);
-
   constructor(
     private readonly libraryService: LibraryService,
     private readonly rulesService: RulesService,
@@ -46,55 +43,113 @@ export class LibraryController {
   @Get()
   @Header('Cache-Control', 'private, max-age=30')
   async list(@Query() query: LibraryQueryDto) {
-    this.logger.log(
-      `GET /library called with includeRules=${query.includeRules}`,
+    const needsRuleFilter =
+      query.status === 'eligible' || query.status === 'skipped';
+    const page = await this.libraryService.queryInventory(
+      query,
+      needsRuleFilter,
     );
-    try {
-      let items = await this.libraryService.getLibrary(false);
-      this.logger.log(`Library returned ${items.length} items`);
-
-      const q = query.q?.trim().toLowerCase();
-      if (q) {
-        items = items.filter(
-          (it) =>
-            it.path.toLowerCase().includes(q) ||
-            it.name.toLowerCase().includes(q),
-        );
-      }
-
-      const ord = query.order === 'asc' ? 1 : -1;
-      if (query.sort === 'name') {
-        items = [...items].sort((a, b) => ord * a.name.localeCompare(b.name));
-      } else if (query.sort === 'size') {
-        items = [...items].sort((a, b) => ord * (a.size - b.size));
-      } else if (query.sort === 'date') {
-        items = [...items].sort(
-          (a, b) =>
-            ord *
-            (new Date(a.lastModified).getTime() -
-              new Date(b.lastModified).getTime()),
-        );
-      } else if (query.sort === 'tracks') {
-        items = [...items].sort(
-          (a, b) =>
-            ord *
-            (a.subtitleTracks.length +
-              a.externalSubtitles.length -
-              (b.subtitleTracks.length + b.externalSubtitles.length)),
-        );
-      }
-
-      const includeRules = query.includeRules === 'true';
-
-      if (!includeRules) {
-        return items;
-      }
-
-      return this.attachRuleStatus(items);
-    } catch (err) {
-      this.logger.error(`Failed to get library: ${err}`);
-      throw err;
+    if (needsRuleFilter) {
+      const evaluated = await this.attachRuleStatus(
+        page.items,
+        query.targetLanguage,
+      );
+      const matching = evaluated.filter((item) =>
+        query.status === 'skipped'
+          ? item.probeStatus !== 'failed' &&
+            (item.probeStatus === 'skipped' || item.ruleStatus.skip)
+          : item.probeStatus === 'ok' && !item.ruleStatus.skip,
+      );
+      return {
+        ...page,
+        total: matching.length,
+        items: matching.slice(page.offset, page.offset + page.limit),
+      };
     }
+    return {
+      ...page,
+      items:
+        query.includeRules === 'true'
+          ? await this.attachRuleStatus(page.items, query.targetLanguage)
+          : page.items,
+    };
+  }
+
+  @Get('groups')
+  async groups(@Query() query: LibraryQueryDto) {
+    const result = await this.libraryService.getGroups(query);
+    if (query.status !== 'eligible' && query.status !== 'skipped')
+      return result;
+    const page = await this.libraryService.queryInventory(query, true);
+    const evaluated = await this.attachRuleStatus(
+      page.items,
+      query.targetLanguage,
+    );
+    const counts = new Map<
+      string,
+      { count: number; seasons: Set<number>; targetPresent: number }
+    >();
+    for (const item of evaluated) {
+      const matches =
+        query.status === 'skipped'
+          ? item.probeStatus !== 'failed' &&
+            (item.probeStatus === 'skipped' || item.ruleStatus.skip)
+          : item.probeStatus === 'ok' && !item.ruleStatus.skip;
+      if (!matches || !item.groupKey) continue;
+      const group = counts.get(item.groupKey) ?? {
+        count: 0,
+        seasons: new Set<number>(),
+        targetPresent: 0,
+      };
+      group.count++;
+      if (
+        [...item.subtitleTracks, ...item.externalSubtitles].some(
+          (track) =>
+            canonicalizeLanguage(track.language) === result.targetLanguage,
+        )
+      ) {
+        group.targetPresent++;
+      }
+      if (item.season !== undefined) group.seasons.add(item.season);
+      counts.set(item.groupKey, group);
+    }
+    return {
+      ...result,
+      groups: result.groups
+        .filter((group) => counts.has(group.key))
+        .map((group) => {
+          const filtered = counts.get(group.key)!;
+          return {
+            ...group,
+            count: filtered.count,
+            targetPresent: filtered.targetPresent,
+            missingTarget: filtered.count - filtered.targetPresent,
+            seasons: [...filtered.seasons].sort((a, b) => a - b),
+          };
+        }),
+    };
+  }
+
+  @Get('ids')
+  async ids(@Query() query: LibraryQueryDto) {
+    const page = await this.libraryService.queryInventory(query, true);
+    if (query.status === 'eligible' || query.status === 'skipped') {
+      const evaluated = await this.attachRuleStatus(
+        page.items,
+        query.targetLanguage,
+      );
+      return {
+        ids: evaluated
+          .filter((item) =>
+            query.status === 'skipped'
+              ? item.probeStatus !== 'failed' &&
+                (item.probeStatus === 'skipped' || item.ruleStatus.skip)
+              : item.probeStatus === 'ok' && !item.ruleStatus.skip,
+          )
+          .map((item) => item.id),
+      };
+    }
+    return { ids: page.items.map((item) => item.id) };
   }
 
   @Post(':id/preview-subtitle')
@@ -107,6 +162,7 @@ export class LibraryController {
       item.path,
       body.sourceTrackIndex,
       'srt',
+      { preview: true },
     );
     try {
       const raw = await fs.readFile(extraction.tempFilePath, 'utf8');
@@ -169,9 +225,14 @@ export class LibraryController {
 
   private async attachRuleStatus(
     items: readonly import('./media-item.entity').MediaItem[],
+    targetLanguage?: string,
   ) {
     const definitions = await this.rulesService.getDefinitions();
-    const config = await this.rulesService.getTranslationConfig();
+    const config = await this.rulesService.getTranslationConfig(
+      targetLanguage
+        ? { targetLanguage: canonicalizeLanguage(targetLanguage) }
+        : undefined,
+    );
 
     return items.map((item) => ({
       ...item,

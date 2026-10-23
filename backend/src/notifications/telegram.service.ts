@@ -1,10 +1,27 @@
 import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
 import * as path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { SettingsService } from '../settings/settings.service';
 import type { TranslationJobPayload } from '../jobs/jobs.types';
 import type { JobReturnValue } from '../jobs/jobs.types';
 
-const RETRY_MS = 3000;
+const MAX_RETRY_AFTER_SECONDS = 30;
+
+interface TelegramResponse {
+  ok?: boolean;
+  error_code?: number;
+  parameters?: { retry_after?: number };
+  result?: { username?: string };
+}
+
+class TelegramRequestError extends Error {
+  constructor(
+    message: string,
+    readonly retryAfterSeconds?: number,
+  ) {
+    super(message);
+  }
+}
 
 @Injectable()
 export class TelegramService {
@@ -35,7 +52,7 @@ export class TelegramService {
   }
 
   async sendMessage(text: string): Promise<void> {
-    const { enabled, token, chatId, events } = await this.loadTelegramConfig();
+    const { enabled, token, chatId } = await this.loadTelegramConfig();
     if (!enabled || !token || !chatId) {
       return;
     }
@@ -152,7 +169,7 @@ export class TelegramService {
 
   async sendTestMessage(): Promise<{ ok: boolean; error?: string }> {
     const s = await this.settingsService.getSettings();
-    if (!s.telegramBotToken || !s.telegramChatId) {
+    if (!s.telegramBotToken?.trim() || !s.telegramChatId?.trim()) {
       return { ok: false, error: 'Configure bot token and chat ID first' };
     }
     try {
@@ -165,7 +182,7 @@ export class TelegramService {
     } catch (e) {
       return {
         ok: false,
-        error: e instanceof Error ? e.message : String(e),
+        error: this.requestError(e).message,
       };
     }
   }
@@ -178,7 +195,7 @@ export class TelegramService {
     error?: string;
   }> {
     const s = await this.settingsService.getSettings();
-    if (!s.telegramBotToken) {
+    if (!s.telegramBotToken?.trim()) {
       return {
         ok: false,
         botOk: false,
@@ -186,48 +203,37 @@ export class TelegramService {
         error: 'Bot token not set',
       };
     }
-    const token = s.telegramBotToken;
+    const token = s.telegramBotToken.trim();
+    let botOk = false;
+    let botUsername: string | undefined;
     try {
-      const botRes = await fetch(`https://api.telegram.org/bot${token}/getMe`, {
-        signal: AbortSignal.timeout(12_000),
-      });
-      const botJson = (await botRes.json()) as {
-        ok?: boolean;
-        result?: { username?: string };
-        description?: string;
-      };
-      const botOk = botJson.ok === true;
-      const botUsername = botJson.result?.username;
-
-      let chatOk = false;
-      if (s.telegramChatId) {
-        const chatRes = await fetch(
-          `https://api.telegram.org/bot${token}/getChat?chat_id=${encodeURIComponent(s.telegramChatId)}`,
-          { signal: AbortSignal.timeout(12_000) },
-        );
-        const chatJson = (await chatRes.json()) as { ok?: boolean };
-        chatOk = chatJson.ok === true;
+      const bot = await this.request(token, 'getMe');
+      botOk = true;
+      botUsername =
+        typeof bot.result?.username === 'string'
+          ? bot.result.username
+          : undefined;
+      if (!s.telegramChatId?.trim()) {
+        return {
+          ok: false,
+          botOk,
+          chatOk: false,
+          botUsername,
+          error: 'Chat ID not set',
+        };
       }
-
-      return {
-        ok: botOk && (s.telegramChatId ? chatOk : false),
-        botOk,
-        chatOk: !!s.telegramChatId && chatOk,
-        botUsername,
-        error: !botOk
-          ? (botJson.description ?? 'getMe failed')
-          : !s.telegramChatId
-            ? 'Chat ID not set'
-            : !chatOk
-              ? 'Chat not reachable for this bot'
-              : undefined,
-      };
+      await this.request(
+        token,
+        `getChat?chat_id=${encodeURIComponent(s.telegramChatId.trim())}`,
+      );
+      return { ok: true, botOk, chatOk: true, botUsername };
     } catch (e) {
       return {
         ok: false,
-        botOk: false,
+        botOk,
         chatOk: false,
-        error: e instanceof Error ? e.message : String(e),
+        botUsername,
+        error: this.requestError(e).message,
       };
     }
   }
@@ -235,7 +241,7 @@ export class TelegramService {
   private fireAndForget(fn: () => Promise<void>): void {
     void fn().catch((err) =>
       this.logger.warn(
-        `Telegram send failed: ${err instanceof Error ? err.message : err}`,
+        `Telegram send failed: ${this.requestError(err).message}`,
       ),
     );
   }
@@ -245,34 +251,98 @@ export class TelegramService {
     chatId: string,
     text: string,
   ): Promise<void> {
-    const attempt = async () => {
-      const res = await fetch(
-        `https://api.telegram.org/bot${token}/sendMessage`,
+    const attempt = () =>
+      this.request(token.trim(), 'sendMessage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId.trim(),
+          text,
+          disable_web_page_preview: true,
+        }),
+      });
+    try {
+      await attempt();
+    } catch (error) {
+      if (
+        !(error instanceof TelegramRequestError) ||
+        error.retryAfterSeconds === undefined ||
+        error.retryAfterSeconds > MAX_RETRY_AFTER_SECONDS
+      ) {
+        throw error;
+      }
+      await delay(error.retryAfterSeconds * 1000);
+      await attempt();
+    }
+  }
+
+  private async request(
+    token: string,
+    method: string,
+    init: RequestInit = {},
+  ): Promise<TelegramResponse> {
+    try {
+      const response = await fetch(
+        `https://api.telegram.org/bot${token}/${method}`,
         {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            chat_id: chatId,
-            text,
-            disable_web_page_preview: true,
-          }),
+          ...init,
+          redirect: 'error',
           signal: AbortSignal.timeout(20_000),
         },
       );
-      const body = await res.text();
-      if (!res.ok) {
-        throw new Error(body || `HTTP ${res.status}`);
+      let body: TelegramResponse | undefined;
+      try {
+        const json: unknown = await response.json();
+        if (json !== null && typeof json === 'object' && !Array.isArray(json)) {
+          body = json as TelegramResponse;
+        }
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          (error.name === 'TimeoutError' || error.name === 'AbortError')
+        ) {
+          throw error;
+        }
+        // HTTP failures still report their status when the response is not JSON.
       }
-    };
-
-    try {
-      await attempt();
-    } catch (first) {
-      this.logger.warn(
-        `Telegram first attempt failed, retry in ${RETRY_MS}ms: ${first instanceof Error ? first.message : first}`,
-      );
-      await new Promise((r) => setTimeout(r, RETRY_MS));
-      await attempt();
+      if (!response.ok || body?.ok !== true) {
+        const code = Number.isInteger(body?.error_code)
+          ? body?.error_code
+          : undefined;
+        const limited = response.status === 429 || code === 429;
+        const retry = body?.parameters?.retry_after;
+        const retryAfter =
+          limited &&
+          typeof retry === 'number' &&
+          Number.isFinite(retry) &&
+          retry >= 0
+            ? Math.ceil(retry)
+            : undefined;
+        const status = `HTTP ${response.status}`;
+        const detail = limited
+          ? `rate limited${retryAfter === undefined ? '' : `; retry after ${retryAfter} seconds`}`
+          : response.status >= 300 && response.status < 400
+            ? 'redirects are not allowed'
+            : code !== undefined
+              ? `Telegram API error ${code}`
+              : 'Telegram API did not confirm success';
+        throw new TelegramRequestError(`${status}: ${detail}`, retryAfter);
+      }
+      return body;
+    } catch (error) {
+      throw this.requestError(error);
     }
+  }
+
+  private requestError(error: unknown): TelegramRequestError {
+    if (error instanceof TelegramRequestError) return error;
+    const timeout =
+      error instanceof Error &&
+      (error.name === 'TimeoutError' || error.name === 'AbortError');
+    return new TelegramRequestError(
+      timeout
+        ? 'Telegram request timed out'
+        : 'Telegram connection failed; check the network and TLS configuration (redirects are not allowed)',
+    );
   }
 }

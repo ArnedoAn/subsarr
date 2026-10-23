@@ -21,10 +21,16 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { ProfilesModule } from '../profiles/profiles.module';
 import { GlossaryModule } from '../glossary/glossary.module';
 import { IntegrationsModule } from '../integrations/integrations.module';
+import { JobCancellationService } from './job-cancellation.service';
+import { JobSchedulerStateEntity } from '../database/entities/job-scheduler-state.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([JobSnapshotEntity, JobLogRowEntity]),
+    TypeOrmModule.forFeature([
+      JobSnapshotEntity,
+      JobLogRowEntity,
+      JobSchedulerStateEntity,
+    ]),
     BullModule.registerQueue({
       name: 'translation',
     }),
@@ -41,6 +47,7 @@ import { IntegrationsModule } from '../integrations/integrations.module';
   ],
   providers: [
     JobsService,
+    JobCancellationService,
     TranslationJobProcessor,
     JobsEventsService,
     JobLogsService,

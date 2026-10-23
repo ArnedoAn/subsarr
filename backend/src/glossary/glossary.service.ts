@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import { type SubsyncEnvConfig } from '../config/subsync.config';
 import type { GlossaryEntry, GlossaryFile } from './glossary.types';
 
-const MAX_ENTRIES = 500;
+import { MAX_GLOSSARY_ENTRIES, validateGlossary } from './glossary.validation';
 
 @Injectable()
 export class GlossaryService {
@@ -24,7 +24,7 @@ export class GlossaryService {
       const raw = await fs.readFile(this.filePath(), 'utf8');
       const parsed = JSON.parse(raw) as GlossaryFile;
       return Array.isArray(parsed.entries)
-        ? parsed.entries.slice(0, MAX_ENTRIES)
+        ? parsed.entries.slice(0, MAX_GLOSSARY_ENTRIES)
         : [];
     } catch {
       return [];
@@ -32,9 +32,10 @@ export class GlossaryService {
   }
 
   async save(entries: GlossaryEntry[]): Promise<void> {
+    entries = validateGlossary(entries);
     const fp = this.filePath();
     await fs.mkdir(path.dirname(fp), { recursive: true });
-    const body: GlossaryFile = { entries: entries.slice(0, MAX_ENTRIES) };
+    const body: GlossaryFile = { entries };
     await fs.writeFile(fp, JSON.stringify(body, null, 2), 'utf8');
   }
 

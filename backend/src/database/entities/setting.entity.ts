@@ -80,6 +80,27 @@ export class SettingEntity {
   @Column({ type: 'text', nullable: true })
   jellyfinApiKey: string | null;
 
+  @Column({ type: 'text', nullable: true })
+  tmdbApiKey: string | null;
+
+  @Column({ type: 'float', default: 0.028 })
+  deepSeekInputCacheHitUsdPerMillion: number;
+
+  @Column({ type: 'float', default: 0.28 })
+  deepSeekInputCacheMissUsdPerMillion: number;
+
+  @Column({ type: 'float', default: 0.42 })
+  deepSeekOutputUsdPerMillion: number;
+
+  @Column({ type: 'text', default: '2025-09-05' })
+  pricingUpdatedAt: string;
+
+  @Column({
+    type: 'text',
+    default: 'https://api-docs.deepseek.com/quick_start/pricing',
+  })
+  pricingSource: string;
+
   @UpdateDateColumn({ type: 'datetime' })
   updatedAt: Date;
 }

@@ -1,4 +1,4 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, ServiceUnavailableException } from '@nestjs/common';
 import { AppService } from './app.service';
 import { JobsService } from './jobs/jobs.service';
 
@@ -18,6 +18,8 @@ export class AppController {
   async getHealthDetailed() {
     const basic = this.appService.getHealth();
     const queue = await this.jobsService.getQueueHealth();
+    if (!queue.ok)
+      throw new ServiceUnavailableException('Translation queue unavailable');
     const m = process.memoryUsage();
     return {
       ...basic,

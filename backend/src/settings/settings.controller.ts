@@ -6,13 +6,16 @@ import {
   Inject,
   Post,
   Put,
+  Query,
   Res,
   UploadedFile,
   UseInterceptors,
   forwardRef,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import AdmZip from 'adm-zip';
+import { plainToInstance } from 'class-transformer';
+import { validateSync } from 'class-validator';
+import { parseSettingsBundle } from './import-bundle';
 import type { Response } from 'express';
 import archiver from 'archiver';
 import { SettingsService } from './settings.service';
@@ -68,6 +71,11 @@ export class SettingsController {
     return this.tokenUsageService.getSummary();
   }
 
+  @Get('budget')
+  budget() {
+    return this.settingsService.getBudgetStatus();
+  }
+
   @Post('telegram/test')
   telegramTest() {
     return this.telegramService.sendTestMessage();
@@ -84,10 +92,22 @@ export class SettingsController {
   }
 
   @Get('export')
-  async exportBundle(@Res() res: Response): Promise<void> {
-    const runtime = await this.settingsService.getSettings();
+  async exportBundle(
+    @Res() res: Response,
+    @Query('includeSecrets') includeSecrets?: string,
+  ): Promise<void> {
+    if (
+      includeSecrets !== undefined &&
+      includeSecrets !== 'true' &&
+      includeSecrets !== 'false'
+    )
+      throw new BadRequestException('includeSecrets must be true or false');
+    const runtime = await this.settingsService.getExportSettings(
+      includeSecrets === 'true',
+    );
     const profiles = await this.profilesService.list();
     const glossary = await this.glossaryService.list();
+    res.setHeader('Cache-Control', 'no-store');
     const token = await this.tokenUsageService.getSummary();
 
     res.setHeader('Content-Type', 'application/zip');
@@ -98,7 +118,7 @@ export class SettingsController {
 
     const archive = archiver('zip', { zlib: { level: 9 } });
     archive.on('error', (err: Error) => {
-      throw err;
+      res.destroy(err);
     });
     archive.pipe(res);
     archive.append(JSON.stringify(runtime, null, 2), {
@@ -117,38 +137,35 @@ export class SettingsController {
   }
 
   @Post('import')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 2 * 1024 * 1024, files: 1 },
+    }),
+  )
   async importBundle(@UploadedFile() file: { buffer: Buffer } | undefined) {
-    if (!file?.buffer?.length) {
+    if (!file?.buffer?.length)
       throw new BadRequestException('ZIP file required');
-    }
-    const zip = new AdmZip(file.buffer);
+    const bundle = parseSettingsBundle(file.buffer);
     const restored: string[] = [];
-    for (const e of zip.getEntries()) {
-      if (e.isDirectory) {
-        continue;
-      }
-      const name = e.entryName.split('/').pop() ?? e.entryName;
-      if (name === 'profiles.json') {
-        const j = JSON.parse(e.getData().toString('utf8')) as {
-          profiles?: import('../profiles/profile.types').TranslationProfile[];
-        };
-        await this.profilesService.save(j.profiles ?? []);
-        restored.push('profiles');
-      }
-      if (name === 'glossary.json') {
-        const j = JSON.parse(e.getData().toString('utf8')) as {
-          entries?: import('../glossary/glossary.types').GlossaryEntry[];
-        };
-        await this.glossaryService.save(j.entries ?? []);
-        restored.push('glossary');
-      }
+    if (bundle.settings) {
+      const dto = plainToInstance(UpdateSettingsDto, bundle.settings);
+      if (
+        validateSync(dto, { whitelist: true, forbidNonWhitelisted: true })
+          .length
+      )
+        throw new BadRequestException('Invalid imported settings schema');
+      await this.settingsService.updateSettings(dto);
+      restored.push('settings');
     }
-    if (restored.length === 0) {
-      throw new BadRequestException(
-        'No profiles.json or glossary.json found in ZIP',
-      );
+    if (bundle.profiles) {
+      await this.profilesService.save(bundle.profiles);
+      restored.push('profiles');
     }
+    if (bundle.glossary) {
+      await this.glossaryService.save(bundle.glossary);
+      restored.push('glossary');
+    }
+    if (bundle.settings) await this.libraryScanScheduler.refreshSchedule();
     return { ok: true, restored };
   }
 }

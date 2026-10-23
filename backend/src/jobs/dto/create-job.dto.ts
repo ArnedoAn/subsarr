@@ -1,5 +1,7 @@
 import {
   IsArray,
+  ArrayMaxSize,
+  ArrayMinSize,
   IsBoolean,
   IsIn,
   IsInt,
@@ -31,6 +33,8 @@ export class CreateJobDto {
 
   @IsOptional()
   @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(20)
   @IsString({ each: true })
   targetLanguages?: string[];
 
@@ -56,6 +60,10 @@ export class CreateJobDto {
   @IsOptional()
   @IsBoolean()
   forceBypassRules?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  allowBudgetOverride?: boolean;
 
   @IsOptional()
   @IsIn(['openrouter', 'deepseek'])

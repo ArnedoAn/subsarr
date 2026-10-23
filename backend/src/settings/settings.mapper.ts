@@ -32,6 +32,15 @@ export function entityToRuntime(e: SettingEntity): RuntimeSettings {
     monthlyBudgetUsd: e.monthlyBudgetUsd ?? undefined,
     jellyfinUrl: e.jellyfinUrl ?? undefined,
     jellyfinApiKey: e.jellyfinApiKey ?? undefined,
+    tmdbApiKey: e.tmdbApiKey ?? undefined,
+    deepSeekInputCacheHitUsdPerMillion:
+      e.deepSeekInputCacheHitUsdPerMillion ?? 0.028,
+    deepSeekInputCacheMissUsdPerMillion:
+      e.deepSeekInputCacheMissUsdPerMillion ?? 0.28,
+    deepSeekOutputUsdPerMillion: e.deepSeekOutputUsdPerMillion ?? 0.42,
+    pricingUpdatedAt: e.pricingUpdatedAt ?? '2025-09-05',
+    pricingSource:
+      e.pricingSource ?? 'https://api-docs.deepseek.com/quick_start/pricing',
   };
 }
 
@@ -63,5 +72,14 @@ export function runtimeToEntity(r: RuntimeSettings): SettingEntity {
   e.monthlyBudgetUsd = r.monthlyBudgetUsd ?? null;
   e.jellyfinUrl = r.jellyfinUrl ?? null;
   e.jellyfinApiKey = r.jellyfinApiKey ?? null;
+  e.tmdbApiKey = r.tmdbApiKey ?? null;
+  e.deepSeekInputCacheHitUsdPerMillion =
+    r.deepSeekInputCacheHitUsdPerMillion ?? 0.028;
+  e.deepSeekInputCacheMissUsdPerMillion =
+    r.deepSeekInputCacheMissUsdPerMillion ?? 0.28;
+  e.deepSeekOutputUsdPerMillion = r.deepSeekOutputUsdPerMillion ?? 0.42;
+  e.pricingUpdatedAt = r.pricingUpdatedAt ?? '2025-09-05';
+  e.pricingSource =
+    r.pricingSource ?? 'https://api-docs.deepseek.com/quick_start/pricing';
   return e;
 }

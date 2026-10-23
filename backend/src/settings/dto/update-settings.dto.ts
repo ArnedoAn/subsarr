@@ -3,19 +3,31 @@ import {
   IsArray,
   IsBoolean,
   IsInt,
+  IsIn,
   IsNumber,
   IsOptional,
   IsString,
   Min,
+  Max,
+  ArrayMaxSize,
+  MaxLength,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { RuleToggleDto } from './rule-toggle.dto';
+import { SECRET_FIELDS, type SecretField } from '../secret-store';
 
 export class UpdateSettingsDto {
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(5)
+  @IsIn(SECRET_FIELDS, { each: true })
+  clearSecrets?: SecretField[];
+
   @IsArray()
   @ArrayNotEmpty()
   @IsString({ each: true })
+  @ArrayMaxSize(32)
   mediaDirs!: string[];
 
   @IsString()
@@ -43,28 +55,32 @@ export class UpdateSettingsDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(10080)
   scanCacheTtlMinutes!: number;
 
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(16)
   concurrency!: number;
 
   @IsArray()
   @IsString({ each: true })
+  @ArrayMaxSize(200)
   pathContainsExclusions!: string[];
 
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  fileTooLargeBytes?: number;
+  fileTooLargeBytes?: number | null;
 
   @IsBoolean()
   translationVerificationEnabled!: boolean;
 
   @IsArray()
   @ValidateNested({ each: true })
+  @ArrayMaxSize(32)
   @Type(() => RuleToggleDto)
   rules!: RuleToggleDto[];
 
@@ -101,19 +117,19 @@ export class UpdateSettingsDto {
   @Type(() => Number)
   @IsInt()
   @Min(0)
-  dailyTokenLimitFree?: number;
+  dailyTokenLimitFree?: number | null;
 
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(0)
-  dailyTokenLimitPaid?: number;
+  dailyTokenLimitPaid?: number | null;
 
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
   @Min(0)
-  monthlyBudgetUsd?: number;
+  monthlyBudgetUsd?: number | null;
 
   @IsOptional()
   @IsString()
@@ -122,4 +138,37 @@ export class UpdateSettingsDto {
   @IsOptional()
   @IsString()
   jellyfinApiKey?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(4096)
+  tmdbApiKey?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(1000)
+  deepSeekInputCacheHitUsdPerMillion?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(1000)
+  deepSeekInputCacheMissUsdPerMillion?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(1000)
+  deepSeekOutputUsdPerMillion?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(10)
+  pricingUpdatedAt?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  pricingSource?: string;
 }

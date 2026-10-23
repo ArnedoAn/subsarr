@@ -19,6 +19,7 @@ import { ProfilesModule } from './profiles/profiles.module';
 import { GlossaryModule } from './glossary/glossary.module';
 import { IntegrationsModule } from './integrations/integrations.module';
 import { RenameModule } from './rename/rename.module';
+import { QuickTranslateModule } from './quick-translate/quick-translate.module';
 
 @Module({
   imports: [
@@ -63,6 +64,7 @@ import { RenameModule } from './rename/rename.module';
     GlossaryModule,
     IntegrationsModule,
     RenameModule,
+    QuickTranslateModule,
   ],
   controllers: [AppController],
   providers: [AppService],

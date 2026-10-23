@@ -7,6 +7,7 @@ const baseItem: MediaItem = {
   path: '/media/movies/The.Matrix.1999.mkv',
   name: 'The.Matrix.1999',
   type: 'movie',
+  probeStatus: 'ok',
   subtitleTracks: [
     { index: 2, language: 'eng', codec: 'subrip' },
     { index: 3, language: 'spa', codec: 'subrip' },

@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { DataSource, Repository } from 'typeorm';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { type SubsyncEnvConfig } from '../config/subsync.config';
 import { SettingEntity } from './entities/setting.entity';
 import { TokenUsageRowEntity } from './entities/token-usage-row.entity';
@@ -15,6 +16,7 @@ import {
 import { runtimeToEntity } from '../settings/settings.mapper';
 import { type ArchivedJobSnapshot } from '../jobs/job-archive.service';
 import { type JobLogEntry } from '../jobs/job-logs.service';
+import { SecretStore, SECRET_FIELDS } from '../settings/secret-store';
 
 const SETTINGS_ID = 'main';
 const TOKEN_FILE = 'token-usage.json';
@@ -45,6 +47,7 @@ export class LegacyImportService implements OnModuleInit {
       this.logger.error(
         `Legacy import failed: ${e instanceof Error ? e.message : e}`,
       );
+      throw e;
     }
   }
 
@@ -61,6 +64,15 @@ export class LegacyImportService implements OnModuleInit {
     if (settingCount === 0) {
       await this.importSettingsFromJsonIfPresent(config);
     }
+    // Previous releases left raw .migrated.bak files; upgrade them as well.
+    await this.encryptLegacySettingsFile(
+      config.settingsFilePath,
+      config.dataDir,
+    );
+    await this.encryptLegacySettingsFile(
+      `${config.settingsFilePath}.migrated.bak`,
+      config.dataDir,
+    );
 
     const tokenCount = await this.dataSource
       .getRepository(TokenUsageRowEntity)
@@ -83,9 +95,17 @@ export class LegacyImportService implements OnModuleInit {
     const p = config.settingsFilePath;
     let raw: string;
     try {
+      const stat = await fs.lstat(p);
+      if (
+        !stat.isFile() ||
+        stat.isSymbolicLink() ||
+        stat.size > 2 * 1024 * 1024
+      )
+        throw new Error('Invalid legacy settings file');
       raw = await fs.readFile(p, 'utf8');
-    } catch {
-      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw error;
     }
 
     try {
@@ -123,16 +143,100 @@ export class LegacyImportService implements OnModuleInit {
         monthlyBudgetUsd: parsed.monthlyBudgetUsd,
         jellyfinUrl: parsed.jellyfinUrl,
         jellyfinApiKey: parsed.jellyfinApiKey,
+        tmdbApiKey: parsed.tmdbApiKey,
+        deepSeekInputCacheHitUsdPerMillion:
+          parsed.deepSeekInputCacheHitUsdPerMillion ?? 0.028,
+        deepSeekInputCacheMissUsdPerMillion:
+          parsed.deepSeekInputCacheMissUsdPerMillion ?? 0.28,
+        deepSeekOutputUsdPerMillion: parsed.deepSeekOutputUsdPerMillion ?? 0.42,
+        pricingUpdatedAt: parsed.pricingUpdatedAt ?? '2025-09-05',
+        pricingSource:
+          parsed.pricingSource ??
+          'https://api-docs.deepseek.com/quick_start/pricing',
       };
 
-      const row = runtimeToEntity(base);
-      await this.dataSource.getRepository(SettingEntity).save(row);
-      await fs.rename(p, `${p}.migrated.bak`);
+      const store = new SecretStore(config.dataDir);
+      for (const field of SECRET_FIELDS) {
+        if (base[field]) base[field] = await store.decrypt(base[field], field);
+      }
+      // Preserve legacy values for UI repair. Secret authentication/encryption
+      // remains mandatory; stricter new bounds apply only to settings writes.
+      const encrypted = { ...base };
+      for (const field of SECRET_FIELDS) {
+        if (encrypted[field])
+          encrypted[field] = await store.encrypt(encrypted[field], field);
+      }
+      await this.dataSource
+        .getRepository(SettingEntity)
+        .save(runtimeToEntity(encrypted));
+      // Only replace source after the database has committed. A failure leaves
+      // the complete original available for recovery; never a partial backup.
+      await this.encryptLegacySettingsFile(p, config.dataDir);
+      try {
+        await fs.link(p, `${p}.migrated.bak`);
+        await fs.unlink(p);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      }
       this.logger.log(`Migrated settings from JSON to SQLite: ${p}`);
     } catch (e) {
       this.logger.warn(
         `Could not migrate settings JSON: ${e instanceof Error ? e.message : e}`,
       );
+      throw e;
+    }
+  }
+
+  private async encryptLegacySettingsFile(
+    filename: string,
+    dataDir: string,
+  ): Promise<void> {
+    let raw: string;
+    try {
+      const stat = await fs.lstat(filename);
+      if (
+        !stat.isFile() ||
+        stat.isSymbolicLink() ||
+        stat.size > 2 * 1024 * 1024
+      )
+        throw new Error('Invalid legacy settings file');
+      raw = await fs.readFile(filename, 'utf8');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw error;
+    }
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+      throw new Error('Invalid legacy settings JSON');
+    const settings = parsed as Record<string, unknown>;
+    const store = new SecretStore(dataDir);
+    let changed = false;
+    for (const field of SECRET_FIELDS) {
+      const value = settings[field];
+      if (value === undefined || value === null || value === '') continue;
+      if (typeof value !== 'string') throw new Error('Invalid legacy secret');
+      // Authenticate existing ciphertext as well; never double-encrypt backups.
+      const plaintext = await store.decrypt(value, field);
+      if (!value.startsWith('enc:v1:')) {
+        settings[field] = await store.encrypt(plaintext, field);
+        changed = true;
+      }
+    }
+    if (!changed) {
+      await fs.chmod(filename, 0o600);
+      return;
+    }
+    const temporary = `${filename}.${randomBytes(8).toString('hex')}.tmp`;
+    await fs.writeFile(temporary, JSON.stringify(settings, null, 2), {
+      flag: 'wx',
+      mode: 0o600,
+    });
+    try {
+      await fs.rename(temporary, filename);
+    } finally {
+      await fs.unlink(temporary).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== 'ENOENT') throw error;
+      });
     }
   }
 

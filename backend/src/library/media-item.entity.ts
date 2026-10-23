@@ -1,25 +1,14 @@
-export type MediaType = 'movie' | 'episode' | 'unknown';
+import type { MediaItem as MediaItemPayload } from '../contracts/api';
 
-export interface SubtitleTrack {
-  index: number;
-  language: string;
-  title?: string;
-  codec: string;
-}
+export type { SubtitleTrack, ExternalSubtitle } from '../contracts/api';
 
-export interface ExternalSubtitle {
-  path: string;
-  language: string;
-  forced: boolean;
-}
+export type MediaType = MediaItemPayload['type'];
+export type ProbeStatus = MediaItemPayload['probeStatus'];
 
-export interface MediaItem {
-  id: string;
-  path: string;
-  name: string;
-  type: MediaType;
-  subtitleTracks: SubtitleTrack[];
-  externalSubtitles: ExternalSubtitle[];
-  size: number;
+/** Internal scanner model retains Date values until HTTP JSON serialization. */
+export interface MediaItem extends Omit<
+  MediaItemPayload,
+  'lastModified' | 'ruleStatus'
+> {
   lastModified: Date;
 }

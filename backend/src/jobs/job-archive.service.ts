@@ -34,7 +34,17 @@ export class JobArchiveService {
     private readonly logRepo: Repository<JobLogRowEntity>,
   ) {}
 
-  private rowToSnapshot(row: JobSnapshotEntity): ArchivedJobSnapshot {
+  private rowToSnapshot(
+    row: JobSnapshotEntity,
+    includeLegacyLogs = false,
+  ): ArchivedJobSnapshot {
+    // Older imports may hold the only copy here. Never erase or silently replace
+    // malformed legacy JSON; lists avoid parsing it, while detail reads surface errors.
+    const legacyLogs = includeLegacyLogs
+      ? (JSON.parse(row.logsJson) as JobLogEntry[])
+      : [];
+    if (!Array.isArray(legacyLogs))
+      throw new Error(`Invalid legacy logs for archived job ${row.id}`);
     return {
       id: row.id,
       state: row.state as ArchivedJobState,
@@ -47,7 +57,7 @@ export class JobArchiveService {
         ? (JSON.parse(row.returnValueJson) as JobReturnValue)
         : undefined,
       failedReason: row.failedReason ?? undefined,
-      logs: JSON.parse(row.logsJson || '[]') as JobLogEntry[],
+      logs: legacyLogs.slice(-500),
     };
   }
 
@@ -64,7 +74,7 @@ export class JobArchiveService {
     row.createdAt = snapshot.createdAt;
     row.processedAt = snapshot.processedAt ?? null;
     row.finishedAt = snapshot.finishedAt;
-    row.logsJson = JSON.stringify(snapshot.logs ?? []);
+    row.logsJson = '[]';
     await this.snapshotRepo.save(row);
     await this.compactArchiveIfNeeded();
   }
@@ -112,6 +122,6 @@ export class JobArchiveService {
 
   async getSnapshot(id: string): Promise<ArchivedJobSnapshot | undefined> {
     const row = await this.snapshotRepo.findOne({ where: { id } });
-    return row ? this.rowToSnapshot(row) : undefined;
+    return row ? this.rowToSnapshot(row, true) : undefined;
   }
 }

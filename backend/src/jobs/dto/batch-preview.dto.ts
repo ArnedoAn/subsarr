@@ -1,5 +1,7 @@
 import {
   IsArray,
+  ArrayMaxSize,
+  ArrayMinSize,
   IsBoolean,
   IsIn,
   IsNotEmpty,
@@ -17,6 +19,8 @@ export class BatchPreviewItemDto {
 
 export class BatchPreviewDto {
   @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(500)
   @ValidateNested({ each: true })
   @Type(() => BatchPreviewItemDto)
   items!: BatchPreviewItemDto[];

@@ -21,4 +21,13 @@ export class TokenUsageRowEntity {
 
   @Column({ type: 'integer', default: 0 })
   totalTokens: number;
+
+  @Column({ type: 'integer', default: 0 })
+  cacheHitTokens: number;
+
+  @Column({ type: 'integer', default: 0 })
+  cacheMissTokens: number;
+
+  @Column({ type: 'float', default: 0 })
+  costUsd: number;
 }

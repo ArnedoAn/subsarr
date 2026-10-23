@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   MessageEvent,
   Param,
   Patch,
@@ -9,7 +10,7 @@ import {
   Query,
   Sse,
 } from '@nestjs/common';
-import { merge, map, Observable, of } from 'rxjs';
+import { Observable } from 'rxjs';
 import { CreateJobDto } from './dto/create-job.dto';
 import { JobsService } from './jobs.service';
 import { JobsEventsService } from './jobs-events.service';
@@ -17,6 +18,8 @@ import { CreateBatchJobsDto } from './dto/create-batch-jobs.dto';
 import { BatchPreviewDto } from './dto/batch-preview.dto';
 import { LogsQueryDto } from './dto/logs-query.dto';
 import { SetJobPriorityDto } from './dto/set-job-priority.dto';
+import { JobsQueryDto } from './dto/jobs-query.dto';
+import { RetryJobDto } from './dto/retry-job.dto';
 
 @Controller('jobs')
 export class JobsController {
@@ -41,8 +44,8 @@ export class JobsController {
   }
 
   @Get()
-  async list() {
-    return this.jobsService.list();
+  async list(@Query() query: JobsQueryDto) {
+    return this.jobsService.list(query);
   }
 
   @Get('logs/all')
@@ -51,8 +54,8 @@ export class JobsController {
   }
 
   @Post(':id/retry')
-  async retry(@Param('id') id: string) {
-    return this.jobsService.retryFromArchive(id);
+  async retry(@Param('id') id: string, @Body() body: RetryJobDto) {
+    return this.jobsService.retryFromArchive(id, body);
   }
 
   @Post(':id/cancel')
@@ -70,16 +73,12 @@ export class JobsController {
     return this.jobsService.getLogsByJob(id);
   }
 
-  @Sse(':id/stream')
-  stream(@Param('id') id: string): Observable<MessageEvent> {
-    const last = this.jobsEventsService.peekLast(id);
-    const live$ = this.jobsEventsService.getStream(id);
-    const source$ = last ? merge(of(last), live$) : live$;
-    return source$.pipe(
-      map((event) => ({
-        data: event,
-      })),
-    );
+  @Sse('stream')
+  stream(
+    @Headers('last-event-id') lastEventId?: string,
+    @Query('lastEventId') resumeCursor?: string,
+  ): Observable<MessageEvent> {
+    return this.jobsEventsService.getSseStream(lastEventId || resumeCursor);
   }
 
   @Get(':id')

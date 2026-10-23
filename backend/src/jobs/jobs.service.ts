@@ -7,8 +7,8 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bull';
-import type { Queue } from 'bull';
-import { randomUUID } from 'node:crypto';
+import type { Job, Queue } from 'bull';
+import { randomUUID, createHash } from 'node:crypto';
 import { type CreateJobDto } from './dto/create-job.dto';
 import { type JobReturnValue, type TranslationJobPayload } from './jobs.types';
 import { OutputService } from '../output/output.service';
@@ -35,6 +35,10 @@ import { TokenUsageService } from '../settings/token-usage.service';
 import { ProfilesService } from '../profiles/profiles.service';
 import type { TranslationProfile } from '../profiles/profile.types';
 import type { LogsQueryDto } from './dto/logs-query.dto';
+import { JobCancellationService } from './job-cancellation.service';
+import { JobsEventsService } from './jobs-events.service';
+import { encodeLogCursor } from './job-logs.service';
+import type { JobsQueryDto } from './dto/jobs-query.dto';
 
 @Injectable()
 export class JobsService implements OnModuleInit {
@@ -51,46 +55,21 @@ export class JobsService implements OnModuleInit {
     private readonly settingsService: SettingsService,
     private readonly tokenUsageService: TokenUsageService,
     private readonly profilesService: ProfilesService,
+    private readonly cancellation: JobCancellationService,
+    private readonly events: JobsEventsService,
   ) {}
 
   onModuleInit() {
-    // Cuando Bull detecta que el proceso murió con un job activo (stalled),
-    // lo mueve de vuelta a "waiting". Interceptamos ese evento para cancelarlo
-    // en lugar de reintentarlo, y lo archivamos como fallido.
     this.translationQueue.on('stalled', (job) => {
-      void (async () => {
-        const jobId = String(job.id);
-        const reason =
-          'Job cancelado: el servidor se reinició mientras estaba en proceso';
-        this.logger.warn(
-          `Stalled job detected [${jobId}], cancelling instead of retrying`,
-        );
-        try {
-          await this.jobLogsService.append({
-            jobId,
-            level: 'error',
-            phase: 'failed',
-            message: reason,
-          });
-          await this.jobArchiveService.appendSnapshot({
-            id: jobId,
-            state: 'failed',
-            data: job.data,
-            createdAt: job.timestamp,
-            processedAt: job.processedOn ?? undefined,
-            finishedAt: Date.now(),
-            progress: 0,
-            failedReason: reason,
-            logs: await this.jobLogsService.getByJob(jobId),
-          });
-          // Quitar del queue para que no se reintente
-          await job.remove();
-        } catch (e) {
+      // Bull may requeue a stalled lock while the old process is still alive.
+      // Signal both processors; never remove/fail work that can still write output.
+      void this.cancellation
+        .request(String(job.id), 'stalled')
+        .catch((error: unknown) => {
           this.logger.error(
-            `Failed to cancel stalled job [${jobId}]: ${e instanceof Error ? e.message : e}`,
+            `Cannot signal stalled job ${job.id}: ${String(error)}`,
           );
-        }
-      })();
+        });
     });
   }
 
@@ -229,76 +208,89 @@ export class JobsService implements OnModuleInit {
       }
     }
 
-    const pathVariant =
-      dto.targetConflictResolution === 'alternate' ? 'alternate' : 'default';
+    await this.settingsService.assertTranslationBudget({
+      provider,
+      automatic: dto.triggeredBy === 'auto-scan',
+      allowBudgetOverride: dto.allowBudgetOverride,
+    });
     const outputPath = this.outputService.buildSubtitlePath(
       item.path,
       targetLanguage,
       false,
       outputExtension,
-      pathVariant,
+      dto.targetConflictResolution === 'alternate' ? 'alternate' : 'default',
     );
-    const waiting = await this.translationQueue.getWaiting();
-    const active = await this.translationQueue.getActive();
-
-    const duplicate = [...waiting, ...active].find((job) => {
-      const payload = job.data;
-      if (!payload.mediaItemPath) {
-        return false;
+    // All subtitle formats for the same target share one claim.
+    const outputKey = `output-${createHash('sha256').update(outputPath.slice(0, -outputExtension.length)).digest('hex')}`;
+    let jobId: string = randomUUID();
+    const client = this.translationQueue.client;
+    const lockKey = this.translationQueue.toKey(`enqueue:${outputKey}`);
+    const claimKey = this.translationQueue.toKey(`claim:${outputKey}`);
+    const lockToken = randomUUID();
+    if ((await client.set(lockKey, lockToken, 'PX', 30000, 'NX')) !== 'OK') {
+      throw new ConflictException('This output is already being queued');
+    }
+    let job: Job<TranslationJobPayload>;
+    try {
+      const previousId = await client.get(claimKey);
+      const previous = previousId
+        ? await this.translationQueue.getJob(previousId)
+        : null;
+      if (previous) {
+        const state = await previous.getState();
+        if (!['completed', 'failed'].includes(state)) {
+          throw new ConflictException(
+            `A job is already processing this output path: ${outputPath}`,
+          );
+        }
       }
-
-      const ext = payload.outputExtension ?? 'srt';
-      const variant =
-        payload.targetConflictResolution === 'alternate'
-          ? 'alternate'
-          : 'default';
-      return (
-        this.outputService.buildSubtitlePath(
-          payload.mediaItemPath,
-          payload.targetLanguage,
-          false,
-          ext,
-          variant,
-        ) === outputPath
-      );
-    });
-
-    if (duplicate) {
-      await this.jobLogsService.append({
-        level: 'warn',
-        phase: 'precheck',
-        message: `Duplicate output path conflict: ${outputPath}`,
-        details: {
-          mediaItemId: dto.mediaItemId,
+      if (
+        previousId &&
+        !previous &&
+        !(await this.jobArchiveService.getSnapshot(previousId))
+      ) {
+        // Reuse a not-yet-added reservation. Even if an enqueue lease expired,
+        // Bull's atomic custom jobId insertion lets only one processor own it.
+        jobId = previousId;
+      }
+      // A pruned cancelled attempt can resemble an interrupted reservation.
+      // Clear only under the enqueue lease, before Bull atomically inserts the selected id.
+      await this.cancellation.clear(jobId);
+      // Persist the claim before add so a crashed enqueue can safely resume it.
+      await client.set(claimKey, jobId);
+      job = await this.translationQueue.add(
+        {
+          mediaItemId: item.id,
+          mediaItemPath: item.path,
+          sourceLanguage,
+          targetLanguage,
+          sourceTrackIndex: dto.sourceTrackIndex,
+          outputExtension,
+          targetConflictResolution: dto.targetConflictResolution,
+          triggeredBy: dto.triggeredBy,
+          forceBypassRules: dto.forceBypassRules ?? false,
+          provider,
+          batchGroupId: ctx.batchGroupId,
+          automatic: dto.triggeredBy === 'auto-scan',
+          allowBudgetOverride: dto.allowBudgetOverride,
         },
-      });
-      throw new ConflictException(
-        `A job is already processing this output path: ${outputPath}`,
+        {
+          jobId,
+          removeOnComplete: 200,
+          removeOnFail: 200,
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 10000 },
+          priority: this.defaultPriority(dto),
+        },
+      );
+    } finally {
+      await client.eval(
+        "if redis.call('GET',KEYS[1]) == ARGV[1] then return redis.call('DEL',KEYS[1]) end return 0",
+        1,
+        lockKey,
+        lockToken,
       );
     }
-
-    const job = await this.translationQueue.add(
-      {
-        mediaItemId: item.id,
-        mediaItemPath: item.path,
-        sourceLanguage,
-        targetLanguage,
-        sourceTrackIndex: dto.sourceTrackIndex,
-        outputExtension,
-        targetConflictResolution: dto.targetConflictResolution,
-        triggeredBy: dto.triggeredBy,
-        forceBypassRules: dto.forceBypassRules ?? false,
-        provider,
-        batchGroupId: ctx.batchGroupId,
-      },
-      {
-        removeOnComplete: 200,
-        removeOnFail: 200,
-        attempts: 3,
-        backoff: { type: 'exponential', delay: 10000 },
-        priority: this.defaultPriority(dto),
-      },
-    );
 
     await this.jobLogsService.append({
       jobId: String(job.id),
@@ -320,14 +312,24 @@ export class JobsService implements OnModuleInit {
 
   async enqueueBatch(dto: CreateBatchJobsDto) {
     await this.assertTokenQuotas();
+    if (!dto.items.length || dto.items.length > 500)
+      throw new BadRequestException('Batch must contain 1 to 500 items');
+    await this.settingsService.assertTranslationBudget({
+      provider: dto.provider,
+      automatic: dto.triggeredBy === 'auto-scan',
+      allowBudgetOverride: dto.allowBudgetOverride,
+    });
 
     const results: Array<{
       mediaItemId: string;
       id?: string | number;
       error?: string;
+      index: number;
+      status: 'queued' | 'conflict' | 'rejected';
+      errorCode?: number;
     }> = [];
 
-    for (const item of dto.items) {
+    for (const [index, item] of dto.items.entries()) {
       try {
         const job = await this.enqueue({
           mediaItemId: item.mediaItemId,
@@ -340,6 +342,7 @@ export class JobsService implements OnModuleInit {
           provider: dto.provider,
           targetConflictResolution: dto.targetConflictResolution,
           priority: dto.priority ?? 8,
+          allowBudgetOverride: dto.allowBudgetOverride,
         });
 
         if ('batchGroupId' in job) {
@@ -348,11 +351,23 @@ export class JobsService implements OnModuleInit {
 
         results.push({
           mediaItemId: item.mediaItemId,
+          index,
+          status: 'queued',
           id: job.id,
         });
       } catch (error) {
         results.push({
           mediaItemId: item.mediaItemId,
+          index,
+          status: error instanceof ConflictException ? 'conflict' : 'rejected',
+          errorCode:
+            error instanceof ConflictException
+              ? 409
+              : error instanceof BadRequestException
+                ? 400
+                : error instanceof NotFoundException
+                  ? 404
+                  : 500,
           error: error instanceof Error ? error.message : 'Failed to enqueue',
         });
       }
@@ -362,6 +377,8 @@ export class JobsService implements OnModuleInit {
   }
 
   async previewBatch(dto: BatchPreviewDto) {
+    if (!dto.items.length || dto.items.length > 500)
+      throw new BadRequestException('Batch must contain 1 to 500 items');
     const sourceLanguage = this.normalizeLanguage(dto.sourceLanguage);
     const targetLanguage = this.normalizeLanguage(dto.targetLanguage);
 
@@ -375,17 +392,30 @@ export class JobsService implements OnModuleInit {
         | 'error';
       sourceTrackIndex?: number;
       reason?: string;
+      alreadyTranslated?: boolean;
+      name?: string;
+      path?: string;
     }> = [];
 
     for (const { mediaItemId } of dto.items) {
       try {
         const item = await this.libraryService.getById(mediaItemId);
+        const alreadyTranslated = [
+          ...item.subtitleTracks,
+          ...item.externalSubtitles,
+        ].some(
+          (subtitle) =>
+            this.normalizeLanguage(subtitle.language) === targetLanguage,
+        );
         const track = item.subtitleTracks.find(
           (t) => t.language === sourceLanguage,
         );
         if (!track) {
           results.push({
             mediaItemId,
+            alreadyTranslated,
+            name: item.name,
+            path: item.path,
             status: 'no_source_track',
             reason: `No embedded subtitle track for language "${sourceLanguage}"`,
           });
@@ -403,6 +433,9 @@ export class JobsService implements OnModuleInit {
           if (ruleResult.skip) {
             results.push({
               mediaItemId,
+              alreadyTranslated,
+              name: item.name,
+              path: item.path,
               status: 'rule_blocked',
               sourceTrackIndex: track.index,
               reason: ruleResult.reason ?? 'Blocked by rules',
@@ -413,6 +446,9 @@ export class JobsService implements OnModuleInit {
 
         results.push({
           mediaItemId,
+          alreadyTranslated,
+          name: item.name,
+          path: item.path,
           status: 'ready',
           sourceTrackIndex: track.index,
         });
@@ -437,10 +473,12 @@ export class JobsService implements OnModuleInit {
     return results;
   }
 
-  async list() {
+  async list(query: JobsQueryDto = {}) {
     const jobs = await this.translationQueue.getJobs([
       'waiting',
       'active',
+      'delayed',
+      'paused',
       'completed',
       'failed',
     ]);
@@ -449,7 +487,11 @@ export class JobsService implements OnModuleInit {
         id: job.id,
         data: job.data,
         progress: Number(job.progress()),
-        state: await job.getState(),
+        state:
+          (await job.getState()) === 'active' &&
+          (await this.cancellation.isRequested(String(job.id)))
+            ? 'cancelling'
+            : await job.getState(),
         returnValue: job.returnvalue as JobReturnValue | undefined,
         failedReason: job.failedReason,
         createdAt: job.timestamp,
@@ -465,13 +507,41 @@ export class JobsService implements OnModuleInit {
       .filter((s) => !redisIds.has(s.id))
       .map((s) => this.mapArchivedToListItem(s));
 
-    const merged = [...fromRedis, ...fromArchive];
-    merged.sort(
+    const snapshots = new Map(
+      archived.map((snapshot) => [snapshot.id, snapshot]),
+    );
+    const merged = [
+      ...fromRedis.map((row) => {
+        const snapshot = snapshots.get(String(row.id));
+        return snapshot?.state === 'cancelled' && row.state !== 'active'
+          ? this.mapArchivedToListItem(snapshot)
+          : row;
+      }),
+      ...fromArchive,
+    ];
+    const filtered = merged.filter(
+      (row) =>
+        (!query.mediaItemId || row.data.mediaItemId === query.mediaItemId) &&
+        (!query.state || query.state.split(',').includes(row.state)) &&
+        (!query.q ||
+          `${row.id} ${row.data.mediaItemPath} ${row.data.targetLanguage}`
+            .toLowerCase()
+            .includes(query.q.toLowerCase())),
+    );
+    filtered.sort(
       (a, b) =>
         (b.finishedAt ?? b.processedAt ?? b.createdAt) -
-        (a.finishedAt ?? a.processedAt ?? a.createdAt),
+          (a.finishedAt ?? a.processedAt ?? a.createdAt) ||
+        String(a.id).localeCompare(String(b.id)),
     );
-    return merged;
+    const offset = query.offset ?? 0;
+    const limit = Math.min(query.limit ?? 50, 200);
+    return {
+      jobs: filtered.slice(offset, offset + limit),
+      total: filtered.length,
+      offset,
+      limit,
+    };
   }
 
   async getById(id: string) {
@@ -481,13 +551,20 @@ export class JobsService implements OnModuleInit {
         id: job.id,
         data: job.data,
         progress: Number(job.progress()),
-        state: await job.getState(),
+        state:
+          (await job.getState()) === 'active' &&
+          (await this.cancellation.isRequested(id))
+            ? 'cancelling'
+            : (await this.jobArchiveService.getSnapshot(id))?.state ===
+                'cancelled'
+              ? 'cancelled'
+              : await job.getState(),
         returnValue: job.returnvalue as JobReturnValue | undefined,
         failedReason: job.failedReason,
         createdAt: job.timestamp,
         processedAt: job.processedOn,
         finishedAt: job.finishedOn,
-        logs: await this.jobLogsService.getByJob(id),
+        logs: await this.getLogsByJob(id),
         archived: false,
       };
     }
@@ -504,7 +581,7 @@ export class JobsService implements OnModuleInit {
         createdAt: snap.createdAt,
         processedAt: snap.processedAt,
         finishedAt: snap.finishedAt,
-        logs: snap.logs,
+        logs: await this.getLogsByJob(id),
         archived: true,
       };
     }
@@ -514,55 +591,49 @@ export class JobsService implements OnModuleInit {
 
   async cancel(id: string) {
     const job = await this.translationQueue.getJob(id);
-    if (!job) {
-      throw new NotFoundException(`Job not found: ${id}`);
-    }
-
+    if (!job) throw new NotFoundException(`Job not found: ${id}`);
     const state = await job.getState();
-    const allowedStates = ['waiting', 'delayed', 'failed', 'active'];
-
-    if (!allowedStates.includes(state)) {
-      throw new BadRequestException(
-        `Cannot cancel job in state: ${state}. Allowed states: ${allowedStates.join(', ')}`,
-      );
+    if (!['waiting', 'paused', 'delayed', 'active'].includes(state))
+      throw new BadRequestException(`Cannot cancel job in state: ${state}`);
+    await this.cancellation.request(id);
+    if (state !== 'active') {
+      try {
+        await job.remove();
+        await this.jobArchiveService.appendSnapshot({
+          id,
+          state: 'cancelled',
+          data: job.data,
+          createdAt: job.timestamp,
+          processedAt: job.processedOn,
+          finishedAt: Date.now(),
+          progress: 100,
+          logs: [],
+        });
+        await this.jobLogsService.append({
+          jobId: id,
+          level: 'info',
+          phase: 'cancelled',
+          message: 'Job cancelled before processing',
+        });
+        this.events.publish(id, {
+          phase: 'cancelled',
+          progressPercent: 100,
+          message: 'Job cancelled',
+          timestamp: new Date().toISOString(),
+        });
+        return { id, canceled: true, state: 'cancelled', previousState: state };
+      } catch (error) {
+        // remove() is atomic and refuses locked work. A waiting -> active race must be stopped cooperatively.
+        if ((await job.getState()) !== 'active') throw error;
+      }
     }
-
-    // For active jobs, we need to discard/fail them before removing
-    if (state === 'active') {
-      // In Bull (not BullMQ), active jobs need to be marked as failed first
-      await job.discard();
-      await job.moveToFailed({ message: 'Job cancelled by user' }, true);
-    }
-
-    const jobData = job.data;
-    const createdAt = job.timestamp;
-    const processedAt = job.processedOn;
-
-    await job.remove();
-
-    await this.jobLogsService.append({
-      jobId: id,
-      level: 'info',
-      phase: 'cancelled',
-      message: `Job cancelled by user (was in state: ${state})`,
+    this.events.publish(id, {
+      phase: 'cancelling',
+      progressPercent: Number(job.progress()),
+      message: 'Waiting for processor to stop',
+      timestamp: new Date().toISOString(),
     });
-
-    await this.jobArchiveService.appendSnapshot({
-      id: String(id),
-      state: 'cancelled',
-      data: jobData,
-      createdAt,
-      processedAt: processedAt ?? undefined,
-      finishedAt: Date.now(),
-      progress: 100,
-      logs: await this.jobLogsService.getByJob(id),
-    });
-
-    return {
-      id,
-      canceled: true,
-      previousState: state,
-    };
+    return { id, canceled: false, state: 'cancelling', previousState: state };
   }
 
   private mapArchivedToListItem(s: ArchivedJobSnapshot) {
@@ -581,7 +652,18 @@ export class JobsService implements OnModuleInit {
   }
 
   async getLogsByJob(jobId: string) {
-    return this.jobLogsService.getByJob(jobId);
+    const canonical = await this.jobLogsService.getByJob(jobId);
+    const snapshot = await this.jobArchiveService.getSnapshot(jobId);
+    const entries = new Map(
+      (snapshot?.logs ?? []).map((entry) => [entry.id, entry]),
+    );
+    for (const entry of canonical) entries.set(entry.id, entry);
+    return [...entries.values()]
+      .sort(
+        (a, b) =>
+          a.timestamp.localeCompare(b.timestamp) || a.id.localeCompare(b.id),
+      )
+      .slice(-500);
   }
 
   async queryLogs(query: LogsQueryDto) {
@@ -589,6 +671,8 @@ export class JobsService implements OnModuleInit {
       level: query.level,
       jobId: query.jobId,
       search: query.search,
+      q: query.q,
+      offset: query.offset,
       from: query.from,
       to: query.to,
       cursor: query.cursor,
@@ -599,12 +683,15 @@ export class JobsService implements OnModuleInit {
       level: q.level,
       jobId: q.jobId,
       search: q.search,
+      q: q.q,
       from: q.from,
       to: q.to,
     });
     const nextCursor =
-      items.length > 0 ? items[items.length - 1].timestamp : null;
-    return { items, total, nextCursor };
+      items.length === q.limit
+        ? encodeLogCursor(items[items.length - 1])
+        : null;
+    return { logs: items, total, nextCursor };
   }
 
   async setJobPriority(id: string, priority: number) {
@@ -618,19 +705,47 @@ export class JobsService implements OnModuleInit {
         `Only waiting or delayed jobs can change priority (state: ${state})`,
       );
     }
-    const json = job.toJSON() as unknown as {
-      data: TranslationJobPayload;
-      opts: Record<string, unknown>;
-    };
-    await job.remove();
-    const newJob = await this.translationQueue.add(json.data, {
-      ...json.opts,
+    // Bull 4.16 has no changePriority API. Update its documented Redis layout atomically,
+    // using the same insertion algorithm as addJobWithPriority.lua (never remove/re-add a job).
+    const client = this.translationQueue.client;
+    const result = await client.eval(
+      `
+      if redis.call('LPOS',KEYS[2],ARGV[1]) then return 0 end
+      local waiting = redis.call('LREM',KEYS[3],0,ARGV[1])
+      local paused = redis.call('LREM',KEYS[4],0,ARGV[1])
+      if waiting == 0 and paused == 0 and not redis.call('ZSCORE',KEYS[5],ARGV[1]) then return 0 end
+      local opts = cjson.decode(redis.call('HGET',KEYS[1],'opts') or '{}')
+      opts.priority = tonumber(ARGV[2]); redis.call('HSET',KEYS[1],'opts',cjson.encode(opts))
+      redis.call('HSET',KEYS[1],'priority',ARGV[2])
+      if waiting > 0 or paused > 0 then
+        local target = KEYS[3]; if paused > 0 then target = KEYS[4] end
+        redis.call('ZADD',KEYS[6],ARGV[2],ARGV[1])
+        local count = redis.call('ZCOUNT',KEYS[6],0,ARGV[2])
+        local before = redis.call('LINDEX',target,redis.call('LLEN',target)-(count-1))
+        if before then redis.call('LINSERT',target,'BEFORE',before,ARGV[1]) else redis.call('RPUSH',target,ARGV[1]) end
+      end
+      return 1`,
+      6,
+      this.translationQueue.toKey(id),
+      this.translationQueue.toKey('active'),
+      this.translationQueue.toKey('wait'),
+      this.translationQueue.toKey('paused'),
+      this.translationQueue.toKey('delayed'),
+      this.translationQueue.toKey('priority'),
+      id,
       priority,
-    } as any);
-    return { id: newJob.id, state: await newJob.getState() };
+    );
+    if (result !== 1)
+      throw new ConflictException(
+        'Job started before its priority could be changed',
+      );
+    return { id, state: await job.getState(), priority };
   }
 
-  async retryFromArchive(id: string) {
+  async retryFromArchive(
+    id: string,
+    options: { allowBudgetOverride?: boolean } = {},
+  ) {
     await this.assertTokenQuotas();
     const snap = await this.jobArchiveService.getSnapshot(id);
     if (!snap) {
@@ -648,10 +763,11 @@ export class JobsService implements OnModuleInit {
       sourceLanguage: d.sourceLanguage,
       targetLanguage: d.targetLanguage,
       sourceTrackIndex: d.sourceTrackIndex,
-      triggeredBy: d.triggeredBy,
+      triggeredBy: 'manual',
       forceBypassRules: d.forceBypassRules ?? false,
       provider: d.provider,
       targetConflictResolution: d.targetConflictResolution,
+      allowBudgetOverride: options.allowBudgetOverride,
     });
   }
 
@@ -739,12 +855,7 @@ export class JobsService implements OnModuleInit {
     ) {
       throw new BadRequestException('Daily paid-tier token limit reached');
     }
-    if (settings.monthlyBudgetUsd != null) {
-      const spent = await this.tokenUsageService.getMonthPaidCostEstimateUsd();
-      if (spent >= settings.monthlyBudgetUsd) {
-        throw new BadRequestException('Monthly DeepSeek budget limit reached');
-      }
-    }
+    // Monthly policy is enforced centrally with automatic/manual override semantics.
   }
 
   private validateMediaPath(dto: CreateJobDto, item: MediaItem): void {

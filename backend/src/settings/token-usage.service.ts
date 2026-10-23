@@ -1,20 +1,20 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import {
-  type TranslationTier,
-  type TranslationUsage,
-} from '../translation/translation.service';
+import { type ProviderUsage } from '../translation/translation.service';
+import { SettingEntity } from '../database/entities/setting.entity';
 import { TokenUsageRowEntity } from '../database/entities/token-usage-row.entity';
 import {
   type TierUsageSummary,
   type TokenUsageSummary,
 } from './dto/token-usage-summary.dto';
 import { estimateDeepSeekCostUsd } from './deepseek-pricing';
+import { isFreeOpenRouterModel } from './provider-pricing';
 
 @Injectable()
 export class TokenUsageService {
   private readonly logger = new Logger(TokenUsageService.name);
+  private usageWrite: Promise<void> = Promise.resolve();
 
   /** USD estimate for DeepSeek paid tier (cache-miss input pricing). Free tier → 0. */
   static estimateCostUsd(
@@ -50,45 +50,110 @@ export class TokenUsageService {
     return { free, paid };
   }
 
-  /** DeepSeek-style cost estimate for paid tier rows in current UTC month. */
+  /** Costs are recorded at response time using the then-configured pricing. */
   async getMonthPaidCostEstimateUsd(): Promise<number> {
     const prefix = new Date().toISOString().slice(0, 7);
     const rows = await this.usageRepo
       .createQueryBuilder('u')
       .where('u.tier = :t', { t: 'paid' })
       .andWhere('u.date LIKE :p', { p: `${prefix}%` })
-      .andWhere('u.date != :legacy', { legacy: 'legacy' })
       .getMany();
-    const prompt = rows.reduce((a, r) => a + r.promptTokens, 0);
-    const completion = rows.reduce((a, r) => a + r.completionTokens, 0);
-    return estimateDeepSeekCostUsd(prompt, completion);
+    return rows.reduce((sum, row) => sum + row.costUsd, 0);
   }
 
-  async addUsage(
-    tier: TranslationTier,
-    usage: TranslationUsage,
-  ): Promise<void> {
-    const date = this.todayUtc();
-    try {
-      let row = await this.usageRepo.findOne({ where: { tier, date } });
-      if (!row) {
-        row = this.usageRepo.create({
-          tier,
-          date,
-          promptTokens: 0,
-          completionTokens: 0,
-          totalTokens: 0,
-        });
-      }
-      row.promptTokens += usage.promptTokens;
-      row.completionTokens += usage.completionTokens;
-      row.totalTokens += usage.totalTokens;
-      await this.usageRepo.save(row);
-    } catch (e) {
-      this.logger.warn(
-        `Could not persist token usage: ${e instanceof Error ? e.message : e}`,
-      );
+  async addProviderUsage(attempt: ProviderUsage): Promise<void> {
+    for (const value of [
+      attempt.promptTokens,
+      attempt.completionTokens,
+      attempt.totalTokens,
+      attempt.cacheHitTokens,
+      attempt.cacheMissTokens,
+    ]) {
+      if (!Number.isSafeInteger(value) || value < 0)
+        throw new Error('Invalid provider token accounting');
     }
+    if (
+      !['deepseek', 'openrouter'].includes(attempt.provider) ||
+      !['free', 'paid'].includes(attempt.tier)
+    )
+      throw new Error('Invalid provider usage');
+    if (
+      attempt.costUsd !== undefined &&
+      (!Number.isFinite(attempt.costUsd) || attempt.costUsd < 0)
+    )
+      throw new Error('Invalid provider response cost');
+    const tier =
+      attempt.provider === 'openrouter' &&
+      isFreeOpenRouterModel(attempt.model) &&
+      !(attempt.costUsd && attempt.costUsd > 0)
+        ? 'free'
+        : 'paid';
+    const date = this.todayUtc();
+    // The append-only response ledger and daily aggregate commit together. SQL
+    // increments prevent concurrent HTTP responses losing each other's usage.
+    const write = this.usageWrite.then(async () =>
+      this.usageRepo.manager.transaction(async (manager) => {
+        const settings = await manager.findOne(SettingEntity, {
+          where: { id: 'main' },
+        });
+        const hit = settings?.deepSeekInputCacheHitUsdPerMillion ?? 0.028;
+        const miss = settings?.deepSeekInputCacheMissUsdPerMillion ?? 0.28;
+        const output = settings?.deepSeekOutputUsdPerMillion ?? 0.42;
+        const cost =
+          attempt.costUsd ??
+          (tier === 'free'
+            ? 0
+            : (attempt.cacheHitTokens * hit +
+                attempt.cacheMissTokens * miss +
+                attempt.completionTokens * output) /
+              1_000_000);
+        const pricingSource =
+          attempt.costUsd !== undefined
+            ? `${attempt.provider} response usage.cost (actual USD)`
+            : `${settings?.pricingSource ?? 'https://api-docs.deepseek.com/quick_start/pricing'}${attempt.provider === 'openrouter' && tier === 'paid' ? ' (DeepSeek-rate estimate; OpenRouter response cost unavailable)' : ''}`;
+        await manager.query(
+          `INSERT INTO provider_usage_attempts
+        (createdAt,date,provider,model,tier,promptTokens,completionTokens,totalTokens,cacheHitTokens,cacheMissTokens,costUsd,pricingSource,pricingUpdatedAt)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [
+            new Date().toISOString(),
+            date,
+            attempt.provider,
+            attempt.model,
+            tier,
+            attempt.promptTokens,
+            attempt.completionTokens,
+            attempt.totalTokens,
+            attempt.cacheHitTokens,
+            attempt.cacheMissTokens,
+            cost,
+            pricingSource,
+            attempt.costUsd !== undefined
+              ? date
+              : (settings?.pricingUpdatedAt ?? '2025-09-05'),
+          ],
+        );
+        await manager.query(
+          `INSERT INTO token_usage (tier,date,promptTokens,completionTokens,totalTokens,cacheHitTokens,cacheMissTokens,costUsd)
+        VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(tier,date) DO UPDATE SET
+        promptTokens=promptTokens+excluded.promptTokens, completionTokens=completionTokens+excluded.completionTokens,
+        totalTokens=totalTokens+excluded.totalTokens, cacheHitTokens=cacheHitTokens+excluded.cacheHitTokens,
+        cacheMissTokens=cacheMissTokens+excluded.cacheMissTokens, costUsd=costUsd+excluded.costUsd`,
+          [
+            tier,
+            date,
+            attempt.promptTokens,
+            attempt.completionTokens,
+            attempt.totalTokens,
+            attempt.cacheHitTokens,
+            attempt.cacheMissTokens,
+            cost,
+          ],
+        );
+      }),
+    );
+    this.usageWrite = write.catch(() => undefined);
+    await write;
   }
 
   /** Aggregates for the current UTC date (rows in DB for today). */
@@ -146,17 +211,13 @@ export class TokenUsageService {
     return {
       free,
       paid,
-      deepSeekEstimatedCostUsd: estimateDeepSeekCostUsd(
-        paid.promptTokens,
-        paid.completionTokens,
-      ),
+      estimatedCostUsd: paidRows.reduce((sum, row) => sum + row.costUsd, 0),
       today: {
         free: today.free,
         paid: today.paid,
-        deepSeekEstimatedCostUsd: estimateDeepSeekCostUsd(
-          today.paid.promptTokens,
-          today.paid.completionTokens,
-        ),
+        estimatedCostUsd: [...freeRows, ...paidRows]
+          .filter((row) => row.date === this.todayUtc())
+          .reduce((sum, row) => sum + row.costUsd, 0),
       },
     };
   }

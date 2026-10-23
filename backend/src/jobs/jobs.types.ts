@@ -9,7 +9,9 @@ export type JobPhase =
   | 'correcting'
   | 'writing'
   | 'completed'
-  | 'failed';
+  | 'failed'
+  | 'cancelling'
+  | 'cancelled';
 
 export interface TranslationJobPayload {
   mediaItemId: string;
@@ -26,6 +28,8 @@ export interface TranslationJobPayload {
   triggeredBy: 'manual' | 'batch' | 'auto-scan';
   forceBypassRules?: boolean;
   provider?: 'openrouter' | 'deepseek';
+  allowBudgetOverride?: boolean;
+  automatic?: boolean;
 }
 
 export interface JobProgressTokenUsage {
@@ -43,6 +47,11 @@ export interface JobProgressEvent {
   timestamp: string;
   details?: unknown;
   tokenUsage?: JobProgressTokenUsage;
+}
+
+export interface JobProgressStreamEvent extends JobProgressEvent {
+  jobId: string;
+  type: JobPhase;
 }
 
 export interface JobReturnValue {

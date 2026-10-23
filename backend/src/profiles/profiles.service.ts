@@ -4,6 +4,7 @@ import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import { type SubsyncEnvConfig } from '../config/subsync.config';
 import type { ProfilesFile, TranslationProfile } from './profile.types';
+import { validateProfiles } from './profile.validation';
 
 @Injectable()
 export class ProfilesService {
@@ -28,6 +29,7 @@ export class ProfilesService {
   }
 
   async save(profiles: TranslationProfile[]): Promise<void> {
+    profiles = validateProfiles(profiles);
     const fp = this.filePath();
     await fs.mkdir(path.dirname(fp), { recursive: true });
     const body: ProfilesFile = { profiles };

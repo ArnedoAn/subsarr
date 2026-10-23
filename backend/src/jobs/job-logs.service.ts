@@ -1,6 +1,11 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  OnModuleInit,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, SelectQueryBuilder } from 'typeorm';
 import { randomUUID } from 'node:crypto';
 import { JobLogRowEntity } from '../database/entities/job-log.entity';
 
@@ -19,12 +24,43 @@ export interface JobLogEntry {
 export interface LogsQuery {
   level?: JobLogLevel;
   jobId?: string;
+  q?: string;
   search?: string;
   from?: string;
   to?: string;
-  /** Cursor: ISO timestamp of last item from previous page (exclusive) */
+  /** Opaque timestamp and ID pair from encodeLogCursor (exclusive). */
   cursor?: string;
   limit?: number;
+  offset?: number;
+}
+
+export function encodeLogCursor(
+  entry: Pick<JobLogEntry, 'timestamp' | 'id'>,
+): string {
+  return Buffer.from(JSON.stringify([entry.timestamp, entry.id])).toString(
+    'base64url',
+  );
+}
+
+function decodeLogCursor(cursor: string): { timestamp: string; id: string } {
+  try {
+    const value: unknown = JSON.parse(
+      Buffer.from(cursor, 'base64url').toString('utf8'),
+    );
+    if (
+      !Array.isArray(value) ||
+      value.length !== 2 ||
+      typeof value[0] !== 'string' ||
+      typeof value[1] !== 'string' ||
+      !value[1] ||
+      !Number.isFinite(Date.parse(value[0]))
+    ) {
+      throw new Error('Invalid cursor');
+    }
+    return { timestamp: new Date(value[0]).toISOString(), id: value[1] };
+  } catch {
+    throw new BadRequestException('Invalid logs cursor');
+  }
 }
 
 function rowToEntry(row: JobLogRowEntity): JobLogEntry {
@@ -42,13 +78,47 @@ function rowToEntry(row: JobLogRowEntity): JobLogEntry {
 }
 
 @Injectable()
-export class JobLogsService {
+export class JobLogsService implements OnModuleInit {
   private readonly logger = new Logger('JobLogs');
+  private nextRetentionAt = 0;
+  private appendsSinceRetention = 0;
+  private retentionPromise?: Promise<void>;
 
   constructor(
     @InjectRepository(JobLogRowEntity)
     private readonly logRepo: Repository<JobLogRowEntity>,
   ) {}
+
+  async onModuleInit(): Promise<void> {
+    await this.enforceRetention();
+  }
+
+  private async enforceRetention(): Promise<void> {
+    if (this.retentionPromise) return this.retentionPromise;
+    const now = Date.now();
+    if (now < this.nextRetentionAt && this.appendsSinceRetention < 500) return;
+    this.appendsSinceRetention = 0;
+    const retention = async () => {
+      // All log kinds, including system rows without jobId, share these bounds.
+      await this.logRepo
+        .createQueryBuilder()
+        .delete()
+        .where('timestamp < :cutoff', {
+          cutoff: new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString(),
+        })
+        .execute();
+      await this.logRepo.query(
+        'DELETE FROM job_logs WHERE id IN (SELECT id FROM job_logs ORDER BY timestamp DESC, id DESC LIMIT -1 OFFSET 50000)',
+      );
+      this.nextRetentionAt = now + 60_000;
+    };
+    this.retentionPromise = retention();
+    try {
+      await this.retentionPromise;
+    } finally {
+      this.retentionPromise = undefined;
+    }
+  }
 
   async append(
     input: Omit<JobLogEntry, 'id' | 'timestamp'>,
@@ -79,6 +149,8 @@ export class JobLogsService {
       row.detailsJson = log.details ? JSON.stringify(log.details) : null;
       row.timestamp = log.timestamp;
       await this.logRepo.save(row);
+      this.appendsSinceRetention += 1;
+      await this.enforceRetention();
     } catch (e) {
       this.logger.warn(
         `Could not persist log: ${e instanceof Error ? e.message : e}`,
@@ -91,9 +163,10 @@ export class JobLogsService {
   async getByJob(jobId: string): Promise<JobLogEntry[]> {
     const rows = await this.logRepo.find({
       where: { jobId },
-      order: { timestamp: 'ASC' },
+      order: { timestamp: 'DESC', id: 'DESC' },
+      take: 500,
     });
-    return rows.map(rowToEntry);
+    return rows.reverse().map(rowToEntry);
   }
 
   /**
@@ -112,65 +185,62 @@ export class JobLogsService {
     }
   }
 
-  async query(query: LogsQuery): Promise<JobLogEntry[]> {
-    const from = query.from ? Date.parse(query.from) : Number.NEGATIVE_INFINITY;
-    const to = query.to ? Date.parse(query.to) : Number.POSITIVE_INFINITY;
-    const limit = Math.min(Math.max(query.limit ?? 5000, 1), 10000);
-
+  private filteredQuery(query: LogsQuery): SelectQueryBuilder<JobLogRowEntity> {
     const qb = this.logRepo.createQueryBuilder('l');
-
-    if (query.level) {
-      qb.andWhere('l.level = :level', { level: query.level });
+    if (query.level) qb.andWhere('l.level = :level', { level: query.level });
+    if (query.jobId) qb.andWhere('l.jobId = :jobId', { jobId: query.jobId });
+    const search = query.q ?? query.search;
+    if (search) {
+      const pattern = `%${search.toLowerCase().replace(/[\\%_]/g, '\\$&')}%`;
+      qb.andWhere(
+        "(LOWER(l.message) LIKE :pattern ESCAPE '\\' OR LOWER(l.phase) LIKE :pattern ESCAPE '\\')",
+        { pattern },
+      );
     }
-    if (query.jobId) {
-      qb.andWhere('l.jobId = :jobId', { jobId: query.jobId });
-    }
-    if (query.search) {
-      const s = `%${query.search.toLowerCase()}%`;
-      qb.andWhere('(LOWER(l.message) LIKE :s OR LOWER(l.phase) LIKE :s)', {
-        s,
+    if (query.from) {
+      qb.andWhere('l.timestamp >= :from', {
+        from: this.boundTimestamp(query.from),
       });
     }
-    if (query.cursor) {
-      qb.andWhere('l.timestamp < :cursor', { cursor: query.cursor });
+    if (query.to) {
+      qb.andWhere('l.timestamp <= :to', { to: this.boundTimestamp(query.to) });
     }
-
-    qb.orderBy('l.timestamp', 'DESC').take(limit);
-
-    const rows = await qb.getMany();
-    return rows
-      .filter((entry) => {
-        const ts = Date.parse(entry.timestamp);
-        return ts >= from && ts <= to;
-      })
-      .map(rowToEntry);
+    return qb;
   }
 
-  async queryCount(
-    query: Omit<LogsQuery, 'cursor' | 'limit'>,
-  ): Promise<number> {
-    const from = query.from ? Date.parse(query.from) : Number.NEGATIVE_INFINITY;
-    const to = query.to ? Date.parse(query.to) : Number.POSITIVE_INFINITY;
-
-    const qb = this.logRepo.createQueryBuilder('l');
-
-    if (query.level) {
-      qb.andWhere('l.level = :level', { level: query.level });
+  private boundTimestamp(value: string): string {
+    if (!Number.isFinite(Date.parse(value))) {
+      throw new BadRequestException('Invalid logs date bound');
     }
-    if (query.jobId) {
-      qb.andWhere('l.jobId = :jobId', { jobId: query.jobId });
-    }
-    if (query.search) {
-      const s = `%${query.search.toLowerCase()}%`;
-      qb.andWhere('(LOWER(l.message) LIKE :s OR LOWER(l.phase) LIKE :s)', {
-        s,
-      });
-    }
+    return new Date(value).toISOString();
+  }
 
-    const rows = await qb.getMany();
-    return rows.filter((entry) => {
-      const ts = Date.parse(entry.timestamp);
-      return ts >= from && ts <= to;
-    }).length;
+  async query(query: LogsQuery): Promise<JobLogEntry[]> {
+    const qb = this.filteredQuery(query);
+    if (query.cursor) {
+      const cursor = decodeLogCursor(query.cursor);
+      qb.andWhere(
+        '(l.timestamp < :timestamp OR (l.timestamp = :timestamp AND l.id < :id))',
+        cursor,
+      );
+    }
+    const offset = Number.isFinite(query.offset)
+      ? Math.max(0, Math.trunc(query.offset!))
+      : 0;
+    const limit = Number.isFinite(query.limit)
+      ? Math.min(Math.max(Math.trunc(query.limit!), 1), 500)
+      : 100;
+    const rows = await qb
+      .orderBy('l.timestamp', 'DESC')
+      .addOrderBy('l.id', 'DESC')
+      .skip(offset)
+      .take(limit)
+      .getMany();
+    return rows.map(rowToEntry);
+  }
+
+  async queryCount(query: LogsQuery): Promise<number> {
+    // Count the complete filtered result, independent of cursor and pagination.
+    return this.filteredQuery(query).getCount();
   }
 }

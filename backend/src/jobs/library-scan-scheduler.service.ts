@@ -4,9 +4,13 @@ import {
   Injectable,
   Logger,
   OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 import { SchedulerRegistry } from '@nestjs/schedule';
 import { CronJob } from 'cron';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { JobSchedulerStateEntity } from '../database/entities/job-scheduler-state.entity';
 import { SettingsService } from '../settings/settings.service';
 import { LibraryService } from '../library/library.service';
 import { JobsService } from './jobs.service';
@@ -19,6 +23,12 @@ const CRON_NAME = 'libraryAutoScan';
 @Injectable()
 export class LibraryScanSchedulerService implements OnModuleInit {
   private readonly logger = new Logger(LibraryScanSchedulerService.name);
+  private scanRunning = false;
+  private readonly knownItemIds = new Set<string>();
+  private readonly pendingProbeItemIds = new Set<string>();
+  private mediaRootsKey: string | null = null;
+  private checkpointRestored = false;
+  private checkpointRestore: Promise<void> | null = null;
 
   constructor(
     @Inject(forwardRef(() => SettingsService))
@@ -27,9 +37,13 @@ export class LibraryScanSchedulerService implements OnModuleInit {
     private readonly jobsService: JobsService,
     private readonly schedulerRegistry: SchedulerRegistry,
     private readonly telegramService: TelegramService,
+    @Optional()
+    @InjectRepository(JobSchedulerStateEntity)
+    private readonly schedulerStateRepository?: Repository<JobSchedulerStateEntity>,
   ) {}
 
   async onModuleInit() {
+    await this.restoreCheckpoint();
     await this.refreshSchedule();
   }
 
@@ -37,7 +51,7 @@ export class LibraryScanSchedulerService implements OnModuleInit {
   async refreshSchedule(): Promise<void> {
     try {
       const existing = this.schedulerRegistry.getCronJob(CRON_NAME);
-      existing.stop();
+      await existing.stop();
       this.schedulerRegistry.deleteCronJob(CRON_NAME);
     } catch {
       /* no job */
@@ -67,17 +81,75 @@ export class LibraryScanSchedulerService implements OnModuleInit {
   }
 
   async runScheduledScan(): Promise<void> {
-    const settings = await this.settingsService.getSettings();
-    if (!settings.autoScanEnabled) {
+    if (this.scanRunning) {
+      this.logger.log(
+        'Library auto-scan skipped: previous run is still active',
+      );
       return;
     }
 
+    this.scanRunning = true;
     const start = Date.now();
     try {
-      const before = await this.libraryService.getLibrary(false);
-      const beforeIds = new Set(before.map((i) => i.id));
-      const items = await this.libraryService.rescan();
-      const newItems = items.filter((i) => !beforeIds.has(i.id));
+      const settings = await this.settingsService.getSettings();
+      await this.restoreCheckpoint();
+      if (!settings.autoScanEnabled) {
+        return;
+      }
+
+      const rootsKey = JSON.stringify([...new Set(settings.mediaDirs)].sort());
+      const rootsChanged =
+        this.mediaRootsKey !== null && this.mediaRootsKey !== rootsKey;
+      const before = this.libraryService.getCachedItems();
+      const baselineReady =
+        (before !== null || this.mediaRootsKey !== null) && !rootsChanged;
+
+      // Interactive scans seed healthy discoveries, but must not consume a
+      // failed discovery that is still waiting for its first successful probe.
+      if (before !== null) {
+        for (const item of before) {
+          if (this.knownItemIds.has(item.id)) continue;
+          if (item.probeStatus === 'failed') {
+            this.pendingProbeItemIds.add(item.id);
+          } else if (!this.pendingProbeItemIds.has(item.id)) {
+            this.knownItemIds.add(item.id);
+          }
+        }
+      }
+      this.logger.log(
+        `Library auto-scan baseline: ${baselineReady ? 'ready' : 'seeding'}, rootsChanged=${rootsChanged}, knownItems=${this.knownItemIds.size}`,
+      );
+
+      const items = await this.libraryService.getLibrary(true, 'scheduled');
+      const newItems: MediaItem[] = [];
+
+      // Root changes seed healthy items without mass enqueueing. Failed items
+      // remain pending across scans, disappearances, and interactive recovery.
+      // Keep known history so an already handled item never becomes new again.
+      for (const item of items) {
+        if (this.knownItemIds.has(item.id)) continue;
+        if (item.probeStatus === 'failed') {
+          this.pendingProbeItemIds.add(item.id);
+          continue;
+        }
+        if (
+          item.probeStatus === 'skipped' &&
+          this.pendingProbeItemIds.has(item.id)
+        ) {
+          continue;
+        }
+        if (
+          item.probeStatus === 'ok' &&
+          (baselineReady || this.pendingProbeItemIds.has(item.id))
+        ) {
+          newItems.push(item);
+        }
+        this.pendingProbeItemIds.delete(item.id);
+        this.knownItemIds.add(item.id);
+      }
+      // Commit roots only after a successful scan so failures still reseed.
+      this.mediaRootsKey = rootsKey;
+      await this.persistCheckpoint();
 
       if (settings.autoTranslateNewItems && newItems.length > 0) {
         for (const item of newItems) {
@@ -87,9 +159,9 @@ export class LibraryScanSchedulerService implements OnModuleInit {
 
       const elapsed = ((Date.now() - start) / 1000).toFixed(1);
       this.logger.log(
-        `Library auto-scan done: ${items.length} items, ${newItems.length} new since last cache, ${elapsed}s`,
+        `Library auto-scan done: ${items.length} items, ${newItems.length} new, baselineReady=${baselineReady}, ${elapsed}s`,
       );
-      void this.telegramService.notifyScanCompleted({
+      await this.telegramService.notifyScanCompleted({
         totalItems: items.length,
         newItems: newItems.length,
         seconds: elapsed,
@@ -98,7 +170,41 @@ export class LibraryScanSchedulerService implements OnModuleInit {
       this.logger.error(
         `Library auto-scan failed: ${err instanceof Error ? err.message : err}`,
       );
+    } finally {
+      this.scanRunning = false;
     }
+  }
+
+  private async restoreCheckpoint(): Promise<void> {
+    if (this.checkpointRestored || !this.schedulerStateRepository) return;
+    if (!this.checkpointRestore) {
+      this.checkpointRestore = this.schedulerStateRepository
+        .findOneBy({ id: CRON_NAME })
+        .then((checkpoint) => {
+          if (checkpoint) {
+            for (const id of checkpoint.knownItemIds) this.knownItemIds.add(id);
+            for (const id of checkpoint.pendingProbeItemIds) {
+              if (!this.knownItemIds.has(id)) this.pendingProbeItemIds.add(id);
+            }
+            this.mediaRootsKey = checkpoint.mediaRootsKey;
+          }
+          this.checkpointRestored = true;
+        })
+        .finally(() => {
+          this.checkpointRestore = null;
+        });
+    }
+    await this.checkpointRestore;
+  }
+
+  private async persistCheckpoint(): Promise<void> {
+    if (!this.schedulerStateRepository) return;
+    await this.schedulerStateRepository.save({
+      id: CRON_NAME,
+      knownItemIds: [...this.knownItemIds],
+      pendingProbeItemIds: [...this.pendingProbeItemIds],
+      mediaRootsKey: this.mediaRootsKey,
+    });
   }
 
   private async tryEnqueueNewMedia(

@@ -1,14 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { MoreThanOrEqual, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { JobSnapshotEntity } from '../database/entities/job-snapshot.entity';
 import { TokenUsageService } from '../settings/token-usage.service';
 import { JobsService } from '../jobs/jobs.service';
 import { LibraryService } from '../library/library.service';
-
-function dayKey(ms: number): string {
-  return new Date(ms).toISOString().slice(0, 10);
-}
 
 const STATS_CACHE_TTL_MS = 30_000;
 
@@ -31,57 +27,85 @@ export class StatsService {
     }
     const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
     const weekStartMs = now - 7 * 24 * 60 * 60 * 1000;
-    const dayStart = new Date();
+    const dayStart = new Date(now);
     dayStart.setUTCHours(0, 0, 0, 0);
     const todayStartMs = dayStart.getTime();
 
-    const allForState = await this.snapshotRepo.find({ select: ['state'] });
-    const jobsByState: Record<string, number> = {};
-    for (const row of allForState) {
-      jobsByState[row.state] = (jobsByState[row.state] ?? 0) + 1;
-    }
-
-    const [recent, todaySnaps, weekSnaps] = await Promise.all([
-      this.snapshotRepo.find({
-        where: { finishedAt: MoreThanOrEqual(thirtyDaysAgo) },
-        select: ['finishedAt', 'state'],
-      }),
-      this.snapshotRepo.find({
-        where: { finishedAt: MoreThanOrEqual(todayStartMs) },
-        select: ['state'],
-      }),
-      this.snapshotRepo.find({
-        where: { finishedAt: MoreThanOrEqual(weekStartMs) },
-        select: ['state'],
-      }),
+    const [stateCounts, summaries, dailyCounts] = await Promise.all([
+      this.snapshotRepo
+        .createQueryBuilder('snapshot')
+        .select('snapshot.state', 'state')
+        .addSelect('COUNT(*)', 'count')
+        .groupBy('snapshot.state')
+        .getRawMany<{ state: string; count: number | string }>(),
+      this.snapshotRepo
+        .createQueryBuilder('snapshot')
+        .select('COUNT(*)', 'total')
+        .addSelect(
+          'SUM(CASE WHEN snapshot.finishedAt >= :today THEN 1 ELSE 0 END)',
+          'todayTotal',
+        )
+        .addSelect(
+          'SUM(CASE WHEN snapshot.finishedAt >= :today AND snapshot.state = :completed THEN 1 ELSE 0 END)',
+          'todayCompleted',
+        )
+        .addSelect(
+          'SUM(CASE WHEN snapshot.finishedAt >= :today AND snapshot.state = :failed THEN 1 ELSE 0 END)',
+          'todayFailed',
+        )
+        .addSelect(
+          'SUM(CASE WHEN snapshot.finishedAt >= :today AND snapshot.state = :cancelled THEN 1 ELSE 0 END)',
+          'todayCancelled',
+        )
+        .addSelect(
+          'SUM(CASE WHEN snapshot.finishedAt >= :week THEN 1 ELSE 0 END)',
+          'weekTotal',
+        )
+        .addSelect(
+          'SUM(CASE WHEN snapshot.finishedAt >= :week AND snapshot.state = :completed THEN 1 ELSE 0 END)',
+          'weekCompleted',
+        )
+        .addSelect(
+          'SUM(CASE WHEN snapshot.finishedAt >= :week AND snapshot.state = :failed THEN 1 ELSE 0 END)',
+          'weekFailed',
+        )
+        .addSelect(
+          'SUM(CASE WHEN snapshot.finishedAt >= :week AND snapshot.state = :cancelled THEN 1 ELSE 0 END)',
+          'weekCancelled',
+        )
+        .setParameters({
+          today: todayStartMs,
+          week: weekStartMs,
+          completed: 'completed',
+          failed: 'failed',
+          cancelled: 'cancelled',
+        })
+        .getRawOne<Record<string, number | string | null>>(),
+      this.snapshotRepo
+        .createQueryBuilder('snapshot')
+        .select("date(snapshot.finishedAt / 1000, 'unixepoch')", 'date')
+        .addSelect('snapshot.state', 'state')
+        .addSelect('COUNT(*)', 'count')
+        .where('snapshot.finishedAt >= :start', { start: thirtyDaysAgo })
+        .groupBy("date(snapshot.finishedAt / 1000, 'unixepoch')")
+        .addGroupBy('snapshot.state')
+        .getRawMany<{ date: string; state: string; count: number | string }>(),
     ]);
-
-    const countStates = (rows: { state: string }[]) => {
-      let completed = 0;
-      let failed = 0;
-      let cancelled = 0;
-      for (const r of rows) {
-        if (r.state === 'completed') {
-          completed += 1;
-        } else if (r.state === 'failed') {
-          failed += 1;
-        } else if (r.state === 'cancelled') {
-          cancelled += 1;
-        }
-      }
-      return {
-        completed,
-        failed,
-        cancelled,
-        total: rows.length,
-      };
-    };
+    const jobsByState = Object.fromEntries(
+      stateCounts.map((row) => [row.state, Number(row.count)]),
+    );
+    const summary = (prefix: 'today' | 'week') => ({
+      completed: Number(summaries?.[`${prefix}Completed`] ?? 0),
+      failed: Number(summaries?.[`${prefix}Failed`] ?? 0),
+      cancelled: Number(summaries?.[`${prefix}Cancelled`] ?? 0),
+      total: Number(summaries?.[`${prefix}Total`] ?? 0),
+    });
 
     const dayMap = new Map<
       string,
       { completed: number; failed: number; cancelled: number }
     >();
-    const endDay = new Date();
+    const endDay = new Date(now);
     const startDay = new Date(thirtyDaysAgo);
     for (
       let d = new Date(startDay);
@@ -94,18 +118,15 @@ export class StatsService {
         cancelled: 0,
       });
     }
-    for (const row of recent) {
-      const key = dayKey(row.finishedAt);
-      const bucket = dayMap.get(key);
-      if (!bucket) {
-        continue;
-      }
-      if (row.state === 'completed') {
-        bucket.completed += 1;
-      } else if (row.state === 'failed') {
-        bucket.failed += 1;
-      } else if (row.state === 'cancelled') {
-        bucket.cancelled += 1;
+    for (const row of dailyCounts) {
+      const bucket = dayMap.get(row.date);
+      if (
+        bucket &&
+        (row.state === 'completed' ||
+          row.state === 'failed' ||
+          row.state === 'cancelled')
+      ) {
+        bucket[row.state] = Number(row.count);
       }
     }
     const jobsByDay = [...dayMap.entries()]
@@ -129,9 +150,9 @@ export class StatsService {
       libraryScan: scanStatus,
       jobsByState,
       jobsSummary: {
-        today: countStates(todaySnaps),
-        week: countStates(weekSnaps),
-        archiveTotal: allForState.length,
+        today: summary('today'),
+        week: summary('week'),
+        archiveTotal: Number(summaries?.total ?? 0),
       },
       jobsByDay,
       tokensByDay,
@@ -144,7 +165,10 @@ export class StatsService {
       },
       uptimeSeconds: Math.floor(process.uptime()),
     };
-    this.statsCache = { data: result, expiresAt: Date.now() + STATS_CACHE_TTL_MS };
+    this.statsCache = {
+      data: result,
+      expiresAt: Date.now() + STATS_CACHE_TTL_MS,
+    };
     return result;
   }
 }

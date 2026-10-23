@@ -1,5 +1,7 @@
 import {
   IsArray,
+  ArrayMaxSize,
+  ArrayMinSize,
   IsBoolean,
   IsIn,
   IsInt,
@@ -29,6 +31,8 @@ export class BatchItemDto {
 
 export class CreateBatchJobsDto {
   @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(500)
   @ValidateNested({ each: true })
   @Type(() => BatchItemDto)
   items!: BatchItemDto[];
@@ -53,6 +57,10 @@ export class CreateBatchJobsDto {
 
   @IsBoolean()
   forceBypassRules!: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  allowBudgetOverride?: boolean;
 
   @IsOptional()
   @IsIn(['openrouter', 'deepseek'])

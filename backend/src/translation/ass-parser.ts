@@ -1,75 +1,49 @@
-/**
- * ASS/SSA (V4+): Dialogue lines use nine commas before the Text field.
- * @see https://wiki.multimedia.cx/index.php/Subtitles#Events
- */
-
+import { parseDocument } from './subtitle-document';
 export interface AssDialogueLine {
   kind: 'dialogue';
-  /** Includes "Dialogue: " and the first nine fields (Layer … Effect), without the comma before Text. */
   prefix: string;
   text: string;
+  ending?: string;
 }
-
 export interface AssVerbatimLine {
   kind: 'verbatim';
   line: string;
+  ending?: string;
 }
-
 export type AssLine = AssDialogueLine | AssVerbatimLine;
-
-function findNthComma(s: string, n: number): number {
-  let count = 0;
-  for (let i = 0; i < s.length; i += 1) {
-    if (s[i] === ',') {
-      count += 1;
-      if (count === n) {
-        return i;
-      }
-    }
-  }
-  return -1;
-}
-
 export function splitAssDialogueBody(
   body: string,
 ): { prefix: string; text: string } | null {
-  const idx = findNthComma(body, 9);
-  if (idx === -1) {
-    return null;
+  let offset = 0;
+  for (let i = 0; i < 9; i++) {
+    const comma = body.indexOf(',', offset);
+    if (comma < 0) return null;
+    offset = comma + 1;
   }
   return {
-    prefix: 'Dialogue: ' + body.slice(0, idx),
-    text: body.slice(idx + 1),
+    prefix: 'Dialogue: ' + body.slice(0, offset - 1),
+    text: body.slice(offset),
   };
 }
-
 export class AssParser {
   parse(input: string): AssLine[] {
-    const normalized = input.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-    const rawLines = normalized.split('\n');
-    return rawLines.map((line) => this.parseLine(line));
-  }
-
-  private parseLine(line: string): AssLine {
-    const trimmedStart = line.trimStart();
-    if (!/^Dialogue:/i.test(trimmedStart)) {
-      return { kind: 'verbatim', line };
+    const document = parseDocument(input, 'ass');
+    const cues = new Map(document.cues.map((cue) => [cue.textEnd, cue]));
+    const result: AssLine[] = [];
+    for (const match of input.matchAll(/([^\r\n]*)(\r\n|\r|\n|$)/g)) {
+      if (!match[0]) break;
+      const cue = cues.get(match.index + match[1].length);
+      result.push(
+        cue
+          ? {
+              kind: 'dialogue',
+              prefix: input.slice(match.index, cue.textStart - 1),
+              text: cue.text,
+              ending: match[2],
+            }
+          : { kind: 'verbatim', line: match[1], ending: match[2] },
+      );
     }
-
-    const m = trimmedStart.match(/^Dialogue:\s*(.*)$/s);
-    if (!m) {
-      return { kind: 'verbatim', line };
-    }
-
-    const split = splitAssDialogueBody(m[1] ?? '');
-    if (!split) {
-      return { kind: 'verbatim', line };
-    }
-
-    return {
-      kind: 'dialogue',
-      prefix: split.prefix,
-      text: split.text,
-    };
+    return result;
   }
 }

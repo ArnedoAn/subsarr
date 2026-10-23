@@ -1,3 +1,6 @@
+import type { SecretField } from './secret-store';
+import type { SettingsPayload } from '../contracts/api';
+
 export interface RuleToggleConfig {
   id: string;
   enabled: boolean;
@@ -29,37 +32,18 @@ export interface RuntimeSettings {
   monthlyBudgetUsd?: number;
   jellyfinUrl?: string;
   jellyfinApiKey?: string;
+  tmdbApiKey?: string;
+  deepSeekInputCacheHitUsdPerMillion?: number;
+  deepSeekInputCacheMissUsdPerMillion?: number;
+  deepSeekOutputUsdPerMillion?: number;
+  pricingUpdatedAt?: string;
+  pricingSource?: string;
 }
 
-export interface PublicSettings {
-  mediaDirs: string[];
-  sourceLanguage: string;
-  targetLanguage: string;
-  openRouterApiKeyMasked: string;
-  deepSeekApiKeyMasked: string;
-  openRouterModel: string;
-  deepSeekModel: string;
-  scanCacheTtlMinutes: number;
-  concurrency: number;
-  pathContainsExclusions: string[];
-  fileTooLargeBytes?: number;
-  translationVerificationEnabled: boolean;
-  rules: RuleToggleConfig[];
-  autoScanEnabled: boolean;
-  autoScanCronExpression: string;
-  autoTranslateNewItems: boolean;
-  telegramBotTokenMasked: string;
-  telegramChatId?: string;
-  telegramEnabled: boolean;
-  telegramEvents: string[];
-  dailyTokenLimitFree?: number;
-  dailyTokenLimitPaid?: number;
-  monthlyBudgetUsd?: number;
-  jellyfinUrl?: string;
-  jellyfinApiKeyMasked: string;
-}
+export type PublicSettings = SettingsPayload;
 
 export interface UpdateSettingsInput {
+  clearSecrets?: SecretField[];
   mediaDirs: string[];
   sourceLanguage: string;
   targetLanguage: string;
@@ -70,7 +54,7 @@ export interface UpdateSettingsInput {
   scanCacheTtlMinutes: number;
   concurrency: number;
   pathContainsExclusions: string[];
-  fileTooLargeBytes?: number;
+  fileTooLargeBytes?: number | null;
   translationVerificationEnabled: boolean;
   rules: RuleToggleConfig[];
   autoScanEnabled?: boolean;
@@ -80,9 +64,15 @@ export interface UpdateSettingsInput {
   telegramChatId?: string;
   telegramEnabled?: boolean;
   telegramEvents?: string[];
-  dailyTokenLimitFree?: number;
-  dailyTokenLimitPaid?: number;
-  monthlyBudgetUsd?: number;
+  dailyTokenLimitFree?: number | null;
+  dailyTokenLimitPaid?: number | null;
+  monthlyBudgetUsd?: number | null;
   jellyfinUrl?: string;
   jellyfinApiKey?: string;
+  tmdbApiKey?: string;
+  deepSeekInputCacheHitUsdPerMillion?: number;
+  deepSeekInputCacheMissUsdPerMillion?: number;
+  deepSeekOutputUsdPerMillion?: number;
+  pricingUpdatedAt?: string;
+  pricingSource?: string;
 }
