@@ -1,28 +1,9 @@
 import type { Metadata } from 'next';
-import { Geist, Geist_Mono, Inter, Space_Grotesk } from 'next/font/google';
 import './globals.css';
 import { AppShell } from '@/components/app-shell';
 import { ToastProvider } from '@/components/ui/toast';
+import { LocalIconCompatibility } from '@/components/ui/icon';
 
-const geistSans = Geist({
-  variable: '--font-geist-sans',
-  subsets: ['latin'],
-});
-
-const geistMono = Geist_Mono({
-  variable: '--font-geist-mono',
-  subsets: ['latin'],
-});
-
-const inter = Inter({
-  variable: '--font-inter',
-  subsets: ['latin'],
-});
-
-const spaceGrotesk = Space_Grotesk({
-  variable: '--font-space-grotesk',
-  subsets: ['latin'],
-});
 
 export const metadata: Metadata = {
   title: 'Subsarr',
@@ -38,7 +19,7 @@ export default function RootLayout({
     <html
       lang="en"
       suppressHydrationWarning
-      className={`${geistSans.variable} ${geistMono.variable} ${inter.variable} ${spaceGrotesk.variable} h-full antialiased`}
+      className="h-full antialiased"
     >
       <head>
         <script
@@ -47,12 +28,9 @@ export default function RootLayout({
               "(function(){try{var t=localStorage.getItem('subsarr-theme');if(t==='light')document.documentElement.classList.add('light');}catch(e){}})();",
           }}
         />
-        <link
-          href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200"
-          rel="stylesheet"
-        />
       </head>
       <body className="min-h-full flex flex-col">
+        <LocalIconCompatibility />
         <ToastProvider>
           <AppShell>{children}</AppShell>
         </ToastProvider>

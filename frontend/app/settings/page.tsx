@@ -1,732 +1,234 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
-import { apiGet, apiPost, apiPut } from '@/lib/api';
-import { type RuleDefinition, type SettingsPayload } from '@/lib/types';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { apiDownload, apiGet, apiPost, apiPut } from '@/lib/api';
+import { type BudgetStatus, type RuleDefinition, type SettingsPayload } from '@/lib/types';
+import { useApiQuery } from '@/lib/use-api-query';
 import { PathBrowser } from '@/components/path-browser';
 import { LanguageCombobox } from '@/components/language-combobox';
 import { pushRecentLanguage } from '@/lib/recent-languages';
 import { Button } from '@/components/ui/button';
 import { Toggle } from '@/components/ui/toggle';
+import { Dialog } from '@/components/ui/dialog';
 import { useToast } from '@/components/ui/toast';
 import { MobilePageHeader } from '@/components/mobile/page-header';
+import { SettingsField, SettingsNumberField, settingsInputClass } from '@/components/settings/field';
+import { NUMBERS, NUMERIC_SETTINGS, validateNumericSettings, type NumericKey } from './settings-validation';
 
-interface TokenUsageSummary {
-  free: { promptTokens: number; completionTokens: number; totalTokens: number };
-  paid: { promptTokens: number; completionTokens: number; totalTokens: number };
-  deepSeekEstimatedCostUsd: number;
+const SECTIONS = [
+  { id: 'providers', label: 'Providers', terms: 'openrouter deepseek models api keys pricing token budget costs' },
+  { id: 'languages', label: 'Languages & quality', terms: 'source target language translation verification quality' },
+  { id: 'library', label: 'Library & scanning', terms: 'media directories folders roots scan cache ttl exclusions file size rules skip' },
+  { id: 'automation', label: 'Automation', terms: 'scheduled rescan cron auto translate new items' },
+  { id: 'integrations', label: 'Integrations', terms: 'jellyfin tmdb metadata telegram bot token chat notifications' },
+  { id: 'advanced', label: 'Advanced', terms: 'concurrency performance import export backup reset defaults' },
+] as const;
+type Section = typeof SECTIONS[number]['id'];
+const SECRET_FIELDS = ['openRouterApiKey', 'deepSeekApiKey', 'telegramBotToken', 'jellyfinApiKey', 'tmdbApiKey'] as const;
+type SecretKey = typeof SECRET_FIELDS[number];
+const EDITABLE_FIELDS = [
+  'mediaDirs', 'sourceLanguage', 'targetLanguage', 'openRouterModel', 'deepSeekModel', 'pathContainsExclusions',
+  'translationVerificationEnabled', 'rules', 'autoScanEnabled', 'autoScanCronExpression', 'autoTranslateNewItems',
+  'telegramChatId', 'telegramEnabled', 'telegramEvents', 'jellyfinUrl', 'pricingUpdatedAt', 'pricingSource',
+] as const satisfies readonly (keyof SettingsPayload)[];
+const emptySecrets = (): Record<SecretKey, string> => ({ openRouterApiKey: '', deepSeekApiKey: '', telegramBotToken: '', jellyfinApiKey: '', tmdbApiKey: '' });
+const numericDraft = (value: SettingsPayload): Record<NumericKey, string> => Object.fromEntries(NUMBERS.map(key => [key, value[key] == null ? '' : String(value[key])])) as Record<NumericKey, string>;
+const errorMessage = (error: unknown) => error instanceof Error ? error.message : 'Request failed. Please try again.';
+interface TokenUsageSummary { free: { totalTokens: number }; paid: { totalTokens: number }; estimatedCostUsd: number }
+interface ConnectionStatus { ok: boolean; botOk?: boolean; chatOk?: boolean; botUsername?: string; error?: string; message?: string }
+const EVENTS = [ ['job.completed', 'Job completed'], ['job.failed', 'Job failed'], ['scan.completed', 'Scheduled scan completed'], ['quota.warning', 'Quota warning (80%)'], ['quota.reached', 'Quota reached'] ];
+
+function Panel({ title, children }: { title: string; children: ReactNode }) {
+  return <div className="rounded-lg bg-surface-container p-4 sm:p-6 space-y-4"><h2 className="font-semibold text-on-surface">{title}</h2>{children}</div>;
 }
 
-type TabId = 'general' | 'apikeys' | 'rules' | 'telegram' | 'advanced';
-
-const TABS: { id: TabId; label: string; icon: string }[] = [
-  { id: 'general',  label: 'General',  icon: 'tune'         },
-  { id: 'apikeys',  label: 'API Keys', icon: 'key'          },
-  { id: 'rules',    label: 'Rules',    icon: 'rule'         },
-  { id: 'telegram', label: 'Telegram', icon: 'send'         },
-  { id: 'advanced', label: 'Advanced', icon: 'settings'     },
-];
-
-const TELEGRAM_EVENT_OPTIONS: { id: string; label: string }[] = [
-  { id: 'job.completed', label: 'Job completado' },
-  { id: 'job.failed', label: 'Job fallido' },
-  { id: 'scan.completed', label: 'Escaneo automático terminado' },
-  { id: 'quota.warning', label: 'Aviso de cuota (~80%)' },
-  { id: 'quota.reached', label: 'Cuota alcanzada' },
-];
-
 export default function SettingsPage() {
-  const { success, error: toastError } = useToast();
-  const [settings, setSettings]           = useState<SettingsPayload | null>(null);
-  const [openRouterKey, setOpenRouterKey] = useState('');
-  const [deepSeekKey, setDeepSeekKey]     = useState('');
-  const [telegramToken, setTelegramToken] = useState('');
-  const [jellyfinKey, setJellyfinKey]     = useState('');
-  const [telegramStatus, setTelegramStatus] = useState<{
-    ok: boolean;
-    botOk: boolean;
-    chatOk: boolean;
-    botUsername?: string;
-    error?: string;
-  } | null>(null);
-  const [tokenSummary, setTokenSummary]   = useState<TokenUsageSummary | null>(null);
-  const [ruleDefinitions, setRuleDefinitions] = useState<RuleDefinition[]>([]);
-  const [activeTab, setActiveTab]         = useState<TabId>('general');
-  const [saving, setSaving]               = useState(false);
-  const [newExclusion, setNewExclusion]   = useState('');
+  const { success } = useToast();
+  const [settings, setSettings] = useState<SettingsPayload | null>(null);
+  const [baseline, setBaseline] = useState('');
+  const [numbers, setNumbers] = useState<Record<NumericKey, string> | null>(null);
+  const [numericBadInputs, setNumericBadInputs] = useState<Partial<Record<NumericKey, boolean>>>({});
+  const [secrets, setSecrets] = useState(emptySecrets);
+  const [active, setActive] = useState<Section>('providers');
+  const [search, setSearch] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [actionError, setActionError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [confirmAction, setConfirmAction] = useState<'reset' | 'discard' | null>(null);
+  const [includeSecrets, setIncludeSecrets] = useState(false);
+  const [newExclusion, setNewExclusion] = useState('');
+  const [telegramStatus, setTelegramStatus] = useState<ConnectionStatus | null>(null);
+  const [jellyfinStatus, setJellyfinStatus] = useState<ConnectionStatus | null>(null);
+  const [connectionBusy, setConnectionBusy] = useState(false);
+  const requests = useRef(new Set<AbortController>());
+  const loadGeneration = useRef(0);
+  const form = useRef<HTMLFormElement>(null);
+  const usage = useApiQuery<TokenUsageSummary>('/settings/token-usage');
+  const rules = useApiQuery<RuleDefinition[]>('/rules');
+  const budget = useApiQuery<BudgetStatus>('/settings/budget');
+  const currentSnapshot = JSON.stringify({ settings, numbers });
+  const dirty = !!settings && (currentSnapshot !== baseline || Object.values(numericBadInputs).some(Boolean) || Object.values(secrets).some(Boolean) || !!newExclusion.trim());
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
 
+  const adopt = useCallback((value: SettingsPayload) => {
+    const draft = numericDraft(value);
+    setSettings(value); setNumbers(draft); setSecrets(emptySecrets()); setNewExclusion('');
+    setNumericBadInputs({});
+    setBaseline(JSON.stringify({ settings: value, numbers: draft }));
+  }, []);
   const load = useCallback(async () => {
+    const controller = new AbortController(); requests.current.add(controller);
+    const generation = ++loadGeneration.current;
+    setLoading(true); setLoadError('');
     try {
-      const [settingsRes, tokenRes, rulesRes] = await Promise.all([
-        apiGet<SettingsPayload>('/settings'),
-        apiGet<TokenUsageSummary>('/settings/token-usage'),
-        apiGet<RuleDefinition[]>('/rules'),
-      ]);
-      setSettings({
-        ...settingsRes,
-        openRouterModel: settingsRes.openRouterModel ?? 'openrouter/free',
-        deepSeekModel: settingsRes.deepSeekModel ?? 'deepseek-chat',
-        autoScanCronExpression: settingsRes.autoScanCronExpression ?? '0 */6 * * *',
-        telegramEvents: settingsRes.telegramEvents ?? [],
-        telegramBotTokenMasked: settingsRes.telegramBotTokenMasked ?? '',
-        telegramEnabled: settingsRes.telegramEnabled ?? false,
-        jellyfinApiKeyMasked: settingsRes.jellyfinApiKeyMasked ?? '',
-        autoScanEnabled: settingsRes.autoScanEnabled ?? false,
-        autoTranslateNewItems: settingsRes.autoTranslateNewItems ?? false,
-      });
-      setTokenSummary(tokenRes);
-      setRuleDefinitions(rulesRes);
-    } catch (err) {
-      toastError(err instanceof Error ? err.message : 'Failed to load settings');
+      const value = await apiGet<SettingsPayload>('/settings', { signal: controller.signal });
+      if (!controller.signal.aborted && generation === loadGeneration.current) adopt(value);
+    } catch (error) {
+      if (!controller.signal.aborted && generation === loadGeneration.current) setLoadError(errorMessage(error));
+    } finally {
+      requests.current.delete(controller);
+      if (!controller.signal.aborted && generation === loadGeneration.current) setLoading(false);
     }
-  }, [toastError]);
-
-  useEffect(() => { void load(); }, [load]);
-
-  const refreshTelegramStatus = useCallback(async () => {
-    try {
-      const s = await apiGet<{
-        ok: boolean;
-        botOk: boolean;
-        chatOk: boolean;
-        botUsername?: string;
-        error?: string;
-      }>('/settings/telegram/status');
-      setTelegramStatus(s);
-    } catch {
-      setTelegramStatus({ ok: false, botOk: false, chatOk: false, error: 'No se pudo consultar' });
-    }
+  }, [adopt]);
+  useEffect(() => { const activeRequests = requests.current; void load(); return () => { for (const request of activeRequests) request.abort(); }; }, [load]);
+  useEffect(() => {
+    const beforeUnload = (event: BeforeUnloadEvent) => { if (dirtyRef.current) { event.preventDefault(); event.returnValue = ''; } };
+    const click = (event: MouseEvent) => {
+      if (!dirtyRef.current || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const anchor = (event.target as Element).closest?.('a[href]');
+      if (!(anchor instanceof HTMLAnchorElement) || anchor.hasAttribute('download') || anchor.target === '_blank') return;
+      const url = new URL(anchor.href, location.href);
+      if (url.pathname === location.pathname && url.search === location.search) return;
+      if (!window.confirm('You have unsaved settings. Leave without saving?')) { event.preventDefault(); event.stopPropagation(); }
+    };
+    const navigation = (window as Window & { navigation?: EventTarget }).navigation;
+    const traverse = (event: Event) => {
+      const navigationEvent = event as Event & { navigationType?: string };
+      if (navigationEvent.navigationType === 'traverse' && event.cancelable && dirtyRef.current && !window.confirm('You have unsaved settings. Leave without saving?')) event.preventDefault();
+    };
+    window.addEventListener('beforeunload', beforeUnload); document.addEventListener('click', click, true); navigation?.addEventListener('navigate', traverse);
+    return () => { window.removeEventListener('beforeunload', beforeUnload); document.removeEventListener('click', click, true); navigation?.removeEventListener('navigate', traverse); };
   }, []);
 
-  useEffect(() => {
-    if (activeTab === 'telegram') {
-      void refreshTelegramStatus();
-    }
-  }, [activeTab, refreshTelegramStatus]);
-
-  const save = async () => {
-    if (!settings) return;
-    setSaving(true);
-    try {
-      await apiPut('/settings', {
-        mediaDirs: settings.mediaDirs,
-        sourceLanguage: settings.sourceLanguage,
-        targetLanguage: settings.targetLanguage,
-        openRouterApiKey: openRouterKey || undefined,
-        deepSeekApiKey: deepSeekKey || undefined,
-        openRouterModel: settings.openRouterModel,
-        deepSeekModel: settings.deepSeekModel,
-        scanCacheTtlMinutes: settings.scanCacheTtlMinutes,
-        concurrency: settings.concurrency,
-        pathContainsExclusions: settings.pathContainsExclusions,
-        fileTooLargeBytes: settings.fileTooLargeBytes,
-        translationVerificationEnabled: settings.translationVerificationEnabled,
-        rules: settings.rules,
-        autoScanEnabled: settings.autoScanEnabled,
-        autoScanCronExpression: settings.autoScanCronExpression,
-        autoTranslateNewItems: settings.autoTranslateNewItems,
-        telegramBotToken: telegramToken || undefined,
-        telegramChatId: settings.telegramChatId,
-        telegramEnabled: settings.telegramEnabled,
-        telegramEvents: settings.telegramEvents,
-        dailyTokenLimitFree: settings.dailyTokenLimitFree,
-        dailyTokenLimitPaid: settings.dailyTokenLimitPaid,
-        monthlyBudgetUsd: settings.monthlyBudgetUsd,
-        jellyfinUrl: settings.jellyfinUrl,
-        jellyfinApiKey: jellyfinKey || undefined,
-      });
-      setOpenRouterKey('');
-      setDeepSeekKey('');
-      setTelegramToken('');
-      setJellyfinKey('');
-      pushRecentLanguage(settings.sourceLanguage);
-      pushRecentLanguage(settings.targetLanguage);
-      success('Settings saved successfully');
-      await load();
-    } catch (err) {
-      toastError(err instanceof Error ? err.message : 'Failed to save settings');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const reset = async () => {
-    try {
-      await apiPost('/settings/reset');
-      success('Settings reset to defaults');
-      await load();
-    } catch (err) {
-      toastError(err instanceof Error ? err.message : 'Reset failed');
-    }
-  };
-
-  if (!settings) {
-    return (
-      <div className="flex items-center justify-center py-20">
-        <div className="flex items-center gap-3 text-on-surface-variant">
-          <span className="material-symbols-outlined text-[20px] animate-spin">progress_activity</span>
-          <span className="text-sm">Loading settings…</span>
-        </div>
-      </div>
-    );
+  async function perform<T>(action: (signal: AbortSignal) => Promise<T>): Promise<T | undefined> {
+    const controller = new AbortController(); requests.current.add(controller);
+    setBusy(true); setActionError('');
+    try { return await action(controller.signal); }
+    catch (error) { if (!controller.signal.aborted) setActionError(errorMessage(error)); }
+    finally { requests.current.delete(controller); if (!controller.signal.aborted) setBusy(false); }
   }
+  async function save() {
+    if (!settings || !numbers || busy) return;
+    if (newExclusion.trim()) { setActionError('Add your pending path exclusion before saving, or clear its input.'); setActive('library'); setSearch(''); return; }
+    if (!settings.mediaDirs.length || settings.mediaDirs.some(value => !value.trim())) {
+      setActionError('Select at least one media directory and provide a path for every directory.'); setActive('library'); setSearch(''); return;
+    }
+    const numericError = validateNumericSettings(numbers, numericBadInputs);
+    if (numericError) { setActionError(numericError.message); setActive(numericError.section as Section); setSearch(''); return; }
+    if (!settings.openRouterModel.trim() || !settings.deepSeekModel.trim()) { setActionError('Both provider model IDs are required.'); setActive('providers'); setSearch(''); return; }
+    if (!form.current?.reportValidity()) return;
+    await perform(async signal => {
+      const body: Record<string, unknown> = {};
+      for (const key of EDITABLE_FIELDS) body[key] = settings[key];
+      for (const key of NUMBERS) body[key] = numbers[key] === '' ? null : Number(numbers[key]);
+      for (const key of SECRET_FIELDS) if (secrets[key].trim()) body[key] = secrets[key].trim();
+      const saved = await apiPut<SettingsPayload>('/settings', body, { signal });
+      if (signal.aborted) return;
+      adopt(saved); pushRecentLanguage(saved.sourceLanguage); pushRecentLanguage(saved.targetLanguage);
+      success('Settings saved'); budget.refetch(); usage.refetch();
+    });
+  }
+  async function exportSettings() {
+    await perform(async signal => {
+      const blob = await apiDownload(`/settings/export${includeSecrets ? '?includeSecrets=true' : ''}`, { signal });
+      if (signal.aborted) return;
+      const url = URL.createObjectURL(blob); const anchor = document.createElement('a');
+      anchor.href = url; anchor.download = 'subsarr-config.zip'; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
+  }
+  async function importSettings(file: File) {
+    if (file.size > 2 * 1024 * 1024) { setActionError('Import ZIP must be 2 MiB or smaller (8 MiB maximum uncompressed).'); return; }
+    if (dirty && !window.confirm('Import replaces saved settings and discards your unsaved changes. Continue?')) return;
+    await perform(async signal => {
+      const data = new FormData(); data.append('file', file);
+      await apiPost('/settings/import', data, { signal });
+      const saved = await apiGet<SettingsPayload>('/settings', { signal });
+      if (signal.aborted) return;
+      adopt(saved); success('Configuration imported'); budget.refetch(); rules.refetch();
+    });
+  }
+  async function checkConnection(kind: 'telegram' | 'jellyfin', test = false) {
+    const controller = new AbortController(); requests.current.add(controller); setConnectionBusy(true);
+    try {
+      const result = kind === 'telegram' && !test
+        ? await apiGet<ConnectionStatus>('/settings/telegram/status', { signal: controller.signal })
+        : await apiPost<ConnectionStatus>(`/settings/${kind}/test`, undefined, { signal: controller.signal });
+      if (!controller.signal.aborted) { if (kind === 'telegram') setTelegramStatus(result); else setJellyfinStatus(result); }
+    } catch (error) {
+      if (!controller.signal.aborted) { const result = { ok: false, error: errorMessage(error) }; if (kind === 'telegram') setTelegramStatus(result); else setJellyfinStatus(result); }
+    } finally { requests.current.delete(controller); if (!controller.signal.aborted) setConnectionBusy(false); }
+  }
+  if (!settings || !numbers) return <section className="space-y-4 py-8"><h1 className="text-2xl font-bold">Settings</h1>{loadError ? <div role="alert" className="space-y-3 text-error"><p>{loadError}</p><Button onClick={() => void load()} disabled={loading}>Retry loading settings</Button></div> : <p role="status">Loading settings…</p>}</section>;
 
-  return (
-    <section className="space-y-6">
-      <MobilePageHeader
-        title="Settings"
-        subtitle="Configure translation defaults, providers, and automation"
-      />
+  const update = <K extends keyof SettingsPayload>(key: K, value: SettingsPayload[K]) => setSettings(previous => previous ? { ...previous, [key]: value } : previous);
+  const numeric = (key: NumericKey, label: string, max: number, options: { min?: number; optional?: boolean; integer?: boolean; hint?: string } = {}) => <SettingsNumberField key={key} label={label} value={numbers[key]} badInput={numericBadInputs[key]} onChange={(value, badInput) => { setNumbers(previous => previous ? { ...previous, [key]: value } : previous); setNumericBadInputs(previous => ({ ...previous, [key]: badInput })); }} min={NUMERIC_SETTINGS[key].min} max={max} {...options} />;
+  const text = (key: keyof SettingsPayload, label: string, maxLength = 256, hint?: string, type = 'text') => <SettingsField label={label} hint={hint}><input aria-label={label} type={type} maxLength={maxLength} value={String(settings[key] ?? '')} onChange={e => update(key, e.target.value as never)} className={settingsInputClass} /></SettingsField>;
+  const secret = (key: SecretKey, label: string) => <SettingsField label={label} hint={settings[`${key}Masked` as keyof SettingsPayload] ? 'Saved securely. Leave empty to keep the saved key; enter a new key only to replace it.' : 'Not configured. Enter a key once and save.'}><input aria-label={label} type="password" autoComplete="new-password" maxLength={4096} value={secrets[key]} onChange={e => setSecrets(previous => ({ ...previous, [key]: e.target.value }))} placeholder="Enter a new key" className={settingsInputClass} /><span className="block text-xs text-on-surface-variant">{settings[`${key}Masked` as keyof SettingsPayload] ? `Saved · ${settings[`${key}Masked` as keyof SettingsPayload]}` : 'Not set'}</span></SettingsField>;
+  const matched = SECTIONS.filter(section => `${section.label} ${section.terms}`.toLowerCase().includes(search.toLowerCase().trim()));
+  const visible = search.trim() ? matched.map(section => section.id) : [active];
+  const show = (section: Section) => visible.includes(section);
+  const connection = (status: ConnectionStatus | null) => status && <p role="status" className={status.ok ? 'text-sm text-success' : 'text-sm text-error'}>{status.ok ? 'Connection successful' : 'Connection failed'}{status.botUsername ? ` · @${status.botUsername}` : ''}{status.error ? `: ${status.error}` : status.message ? `: ${status.message}` : ''}</p>;
 
-      <div className="hidden md:flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-on-surface tracking-tight">Settings</h1>
-          <p className="text-sm text-on-surface-variant mt-0.5">Configure your translation preferences</p>
-        </div>
-      </div>
-
-      {/* Tabs + Content */}
-      <div className="flex flex-col lg:flex-row gap-6">
-        {/* Tab navigation */}
-        <nav className="flex lg:flex-col gap-1 lg:w-44 flex-shrink-0 overflow-x-auto lg:overflow-visible custom-scrollbar pb-1 lg:pb-0">
-          {TABS.map(tab => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`flex-shrink-0 whitespace-nowrap flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition-all text-left
-                ${activeTab === tab.id
-                  ? 'bg-primary/10 text-primary'
-                  : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high'
-                }`}
-            >
-              <span
-                className="material-symbols-outlined text-[18px] flex-shrink-0"
-                style={{ fontVariationSettings: activeTab === tab.id ? 'FILL 1' : 'FILL 0' }}
-              >
-                {tab.icon}
-              </span>
-              {tab.label}
-            </button>
-          ))}
-        </nav>
-
-        {/* Tab content */}
-        <div className="flex-1 min-w-0 space-y-6">
-
-          {/* GENERAL TAB */}
-          {activeTab === 'general' && (
-            <>
-              {/* Media Directories */}
-              <div className="bg-surface-container rounded-lg p-6 space-y-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h2 className="text-sm font-semibold text-on-surface">Media Directories</h2>
-                    <p className="text-xs text-on-surface-variant mt-0.5">Folders to scan for media files</p>
-                  </div>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    iconLeft="add"
-                    onClick={() => setSettings({ ...settings, mediaDirs: [...settings.mediaDirs, ''] })}
-                  >
-                    Add
-                  </Button>
-                </div>
-                <div className="space-y-2">
-                  {settings.mediaDirs.map((dir, idx) => (
-                    <div key={idx} className="flex items-center gap-2 group">
-                      <div className="flex-1">
-                        <PathBrowser
-                          value={dir}
-                          onChange={newPath => {
-                            const updated = [...settings.mediaDirs];
-                            updated[idx] = newPath;
-                            setSettings({ ...settings, mediaDirs: updated });
-                          }}
-                          placeholder="Select or type a directory path…"
-                        />
-                      </div>
-                      <button
-                        onClick={() => {
-                          const updated = settings.mediaDirs.filter((_, i) => i !== idx);
-                          setSettings({ ...settings, mediaDirs: updated });
-                        }}
-                        className="btn btn-ghost btn-icon btn-sm text-on-surface-variant hover:text-error opacity-0 group-hover:opacity-100 transition-all"
-                        title="Remove"
-                      >
-                        <span className="material-symbols-outlined text-[18px]">delete</span>
-                      </button>
-                    </div>
-                  ))}
-                  {settings.mediaDirs.length === 0 && (
-                    <p className="text-sm text-on-surface-variant text-center py-4">
-                      No directories configured. Add one to get started.
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              {/* Translation Defaults */}
-              <div className="bg-surface-container rounded-lg p-6 space-y-4">
-                <div>
-                  <h2 className="text-sm font-semibold text-on-surface">Translation Defaults</h2>
-                  <p className="text-xs text-on-surface-variant mt-0.5">Default language pair for new translation jobs</p>
-                </div>
-                <div className="grid sm:grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <label className="field-label">Source Language</label>
-                    <LanguageCombobox
-                      value={settings.sourceLanguage || 'eng'}
-                      onChange={(v) => setSettings({ ...settings, sourceLanguage: v })}
-                      ariaLabel="Source Language"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="field-label">Target Language</label>
-                    <LanguageCombobox
-                      value={settings.targetLanguage && settings.targetLanguage !== 'und' ? settings.targetLanguage : 'eng'}
-                      onChange={(v) => setSettings({ ...settings, targetLanguage: v })}
-                      ariaLabel="Target Language"
-                    />
-                  </div>
-                </div>
-
-                <div className="pt-2 border-t border-outline-variant/15">
-                  <Toggle
-                    checked={settings.translationVerificationEnabled}
-                    onChange={v => setSettings({ ...settings, translationVerificationEnabled: v })}
-                    label="Translation Verification"
-                    description="Verifies translated lines using language detection. Failed lines are re-translated up to 2 times."
-                  />
-                </div>
-              </div>
-            </>
-          )}
-
-          {/* API KEYS TAB */}
-          {activeTab === 'apikeys' && (
-            <>
-              <div className="bg-surface-container rounded-lg p-6 space-y-5">
-                <div>
-                  <h2 className="text-sm font-semibold text-on-surface">API Keys</h2>
-                  <p className="text-xs text-on-surface-variant mt-0.5">Configure your translation providers</p>
-                </div>
-
-                {/* OpenRouter */}
-                <div className="space-y-2 pb-4 border-b border-outline-variant/15">
-                  <div className="space-y-1.5">
-                    <label className="field-label">OpenRouter model ID</label>
-                    <input
-                      type="text"
-                      value={settings.openRouterModel}
-                      onChange={e => setSettings({ ...settings, openRouterModel: e.target.value })}
-                      placeholder="openrouter/free"
-                      className="w-full engraved-input text-sm px-3 py-2 font-mono"
-                    />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <label className="field-label">OpenRouter API Key</label>
-                    <span className={`text-xs px-2 py-0.5 rounded font-semibold ${
-                      settings.openRouterApiKeyMasked ? 'bg-success/10 text-success border border-success/20' : 'bg-surface-container-high text-on-surface-variant border border-outline-variant'
-                    }`}>
-                      {settings.openRouterApiKeyMasked || 'Not set'}
-                    </span>
-                  </div>
-                  <input
-                    type="password"
-                    value={openRouterKey}
-                    onChange={e => setOpenRouterKey(e.target.value)}
-                    placeholder="sk-or-v1-xxxxxxxxxxxxxxxxxxxx"
-                    className="w-full engraved-input text-sm px-3 py-2.5 font-mono"
-                    autoComplete="off"
-                  />
-                  <p className="text-xs text-on-surface-variant">Primary provider. Free tier available.</p>
-                </div>
-
-                {/* DeepSeek */}
-                <div className="space-y-2">
-                  <div className="space-y-1.5">
-                    <label className="field-label">DeepSeek model ID</label>
-                    <input
-                      type="text"
-                      value={settings.deepSeekModel}
-                      onChange={e => setSettings({ ...settings, deepSeekModel: e.target.value })}
-                      placeholder="deepseek-chat"
-                      className="w-full engraved-input text-sm px-3 py-2 font-mono"
-                    />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <label className="field-label">DeepSeek API Key</label>
-                    <span className={`text-xs px-2 py-0.5 rounded font-semibold ${
-                      settings.deepSeekApiKeyMasked ? 'bg-success/10 text-success border border-success/20' : 'bg-surface-container-high text-on-surface-variant border border-outline-variant'
-                    }`}>
-                      {settings.deepSeekApiKeyMasked || 'Not set'}
-                    </span>
-                  </div>
-                  <input
-                    type="password"
-                    value={deepSeekKey}
-                    onChange={e => setDeepSeekKey(e.target.value)}
-                    placeholder="sk-xxxxxxxxxxxxxxxxxxxx"
-                    className="w-full engraved-input text-sm px-3 py-2.5 font-mono"
-                    autoComplete="off"
-                  />
-                  <p className="text-xs text-on-surface-variant">Paid fallback provider.</p>
-                </div>
-              </div>
-
-              {/* Token Usage */}
-              <div className="grid sm:grid-cols-2 gap-4">
-                <div className="bg-surface-container rounded-lg p-5">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-on-surface-variant mb-2">Free Tier Usage</p>
-                  <p className="text-3xl font-bold text-primary">{(tokenSummary?.free.totalTokens ?? 0).toLocaleString()}</p>
-                  <p className="text-xs text-on-surface-variant mt-1">tokens used</p>
-                </div>
-                <div className="bg-surface-container rounded-lg p-5">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-on-surface-variant mb-2">DeepSeek Paid</p>
-                  <p className="text-3xl font-bold text-warning">{(tokenSummary?.paid.totalTokens ?? 0).toLocaleString()}</p>
-                  <p className="text-xs text-on-surface-variant mt-1">
-                    tokens · <span className="text-warning font-semibold">${tokenSummary?.deepSeekEstimatedCostUsd ?? 0} USD</span>
-                  </p>
-                </div>
-              </div>
-            </>
-          )}
-
-          {/* TELEGRAM TAB */}
-          {activeTab === 'telegram' && (
-            <div className="bg-surface-container rounded-lg p-6 space-y-5">
-              <div>
-                <h2 className="text-sm font-semibold text-on-surface">Telegram Bot</h2>
-                <p className="text-xs text-on-surface-variant mt-0.5">
-                  Notificaciones vía API HTTP (sin dependencias extra). Crea un bot con @BotFather, envía un mensaje al bot y obtén tu chat ID con @userinfobot o{' '}
-                  <code className="font-mono text-[11px]">getUpdates</code>.
-                </p>
-              </div>
-              <Toggle
-                checked={settings.telegramEnabled}
-                onChange={v => setSettings({ ...settings, telegramEnabled: v })}
-                label="Activar notificaciones Telegram"
-              />
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <label className="field-label">Bot token</label>
-                  <span className={`text-xs px-2 py-0.5 rounded font-semibold ${
-                    settings.telegramBotTokenMasked ? 'bg-success/10 text-success border border-success/20' : 'bg-surface-container-high text-on-surface-variant'
-                  }`}>
-                    {settings.telegramBotTokenMasked || 'No configurado'}
-                  </span>
-                </div>
-                <input
-                  type="password"
-                  value={telegramToken}
-                  onChange={e => setTelegramToken(e.target.value)}
-                  placeholder="123456789:AAH..."
-                  className="w-full engraved-input text-sm px-3 py-2 font-mono"
-                  autoComplete="off"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="field-label">Chat ID</label>
-                <input
-                  type="text"
-                  value={settings.telegramChatId ?? ''}
-                  onChange={e => setSettings({ ...settings, telegramChatId: e.target.value })}
-                  placeholder="ej. 123456789 o -100..."
-                  className="w-full engraved-input text-sm px-3 py-2 font-mono"
-                />
-              </div>
-              <div>
-                <p className="text-xs font-semibold text-on-surface-variant mb-2">Eventos</p>
-                <div className="space-y-2">
-                  {TELEGRAM_EVENT_OPTIONS.map(opt => {
-                    const on = settings.telegramEvents.includes(opt.id);
-                    return (
-                      <Toggle
-                        key={opt.id}
-                        checked={on}
-                        onChange={v => {
-                          const next = new Set(settings.telegramEvents);
-                          if (v) {
-                            next.add(opt.id);
-                          } else {
-                            next.delete(opt.id);
-                          }
-                          setSettings({ ...settings, telegramEvents: [...next] });
-                        }}
-                        label={opt.label}
-                      />
-                    );
-                  })}
-                </div>
-              </div>
-              <div className="flex flex-wrap items-center gap-3 pt-2">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  iconLeft="send"
-                  onClick={async () => {
-                    try {
-                      const r = await apiPost<{ ok: boolean; error?: string }>('/settings/telegram/test');
-                      if (r.ok) {
-                        success('Mensaje de prueba enviado');
-                      } else {
-                        toastError(r.error ?? 'Fallo al enviar');
-                      }
-                    } catch (e) {
-                      toastError(e instanceof Error ? e.message : 'Error');
-                    }
-                  }}
-                >
-                  Enviar prueba
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  iconLeft="refresh"
-                  onClick={() => void refreshTelegramStatus()}
-                >
-                  Comprobar conexión
-                </Button>
-              </div>
-              {telegramStatus && (
-                <div
-                  className={`rounded-lg border px-3 py-2 text-sm ${
-                    telegramStatus.ok
-                      ? 'border-success/30 bg-success/8 text-success'
-                      : 'border-warning/30 bg-warning/8 text-warning'
-                  }`}
-                >
-                  <p className="font-medium">
-                    {telegramStatus.ok ? 'Conexión OK' : 'Conexión incompleta'}
-                  </p>
-                  {telegramStatus.botUsername && (
-                    <p className="text-xs mt-1 opacity-90">@{telegramStatus.botUsername}</p>
-                  )}
-                  {telegramStatus.error && (
-                    <p className="text-xs mt-1">{telegramStatus.error}</p>
-                  )}
-                  <p className="text-[11px] mt-1 opacity-80">
-                    Bot: {telegramStatus.botOk ? 'sí' : 'no'} · Chat: {telegramStatus.chatOk ? 'sí' : 'no'}
-                  </p>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* RULES TAB */}
-          {activeTab === 'rules' && (
-            <div className="bg-surface-container rounded-lg p-6 space-y-5">
-              <div>
-                <h2 className="text-sm font-semibold text-on-surface">Skip Rules Engine</h2>
-                <p className="text-xs text-on-surface-variant mt-0.5">Configure when to skip translation automatically</p>
-              </div>
-              <div className="space-y-5">
-                {ruleDefinitions.map(def => {
-                  const idx     = settings.rules.findIndex(r => r.id === def.id);
-                  const enabled = idx >= 0 ? settings.rules[idx].enabled : def.enabled;
-                  return (
-                    <Toggle
-                      key={def.id}
-                      checked={enabled}
-                      onChange={v => {
-                        const updated = [...settings.rules];
-                        if (idx >= 0) updated[idx] = { ...updated[idx], enabled: v };
-                        else updated.push({ id: def.id, enabled: v });
-                        setSettings({ ...settings, rules: updated });
-                      }}
-                      label={def.label}
-                      description={def.description}
-                    />
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* ADVANCED TAB */}
-          {activeTab === 'advanced' && (
-            <>
-              <div className="bg-surface-container rounded-lg p-6 space-y-4">
-                <div>
-                  <h2 className="text-sm font-semibold text-on-surface">Library auto-scan</h2>
-                  <p className="text-xs text-on-surface-variant mt-0.5">
-                    Re-scan media folders on a schedule (cron). New files detected vs the previous cache can be auto-queued for translation.
-                  </p>
-                </div>
-                <Toggle
-                  checked={settings.autoScanEnabled}
-                  onChange={v => setSettings({ ...settings, autoScanEnabled: v })}
-                  label="Enable scheduled rescan"
-                  description="Uses the cron expression below (server timezone)."
-                />
-                <div className="space-y-1.5">
-                  <label className="field-label">Cron expression</label>
-                  <input
-                    type="text"
-                    value={settings.autoScanCronExpression}
-                    onChange={e => setSettings({ ...settings, autoScanCronExpression: e.target.value })}
-                    placeholder="0 */6 * * *"
-                    className="w-full engraved-input text-sm px-3 py-2 font-mono"
-                  />
-                  <p className="text-xs text-on-surface-variant">Example: every 6 hours → <code className="font-mono">0 */6 * * *</code></p>
-                </div>
-                <Toggle
-                  checked={settings.autoTranslateNewItems}
-                  onChange={v => setSettings({ ...settings, autoTranslateNewItems: v })}
-                  label="Auto-translate new items"
-                  description="When a scheduled scan finds files that were not in the library cache, enqueue translation if rules allow (embedded source track must match default source language)."
-                />
-              </div>
-
-              <div className="bg-surface-container rounded-lg p-6 space-y-4">
-                <div>
-                  <h2 className="text-sm font-semibold text-on-surface">Performance</h2>
-                  <p className="text-xs text-on-surface-variant mt-0.5">Scan and processing settings</p>
-                </div>
-                <div className="grid sm:grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <label className="field-label">Scan Cache TTL (minutes)</label>
-                    <input
-                      type="number"
-                      min={1}
-                      value={settings.scanCacheTtlMinutes}
-                      onChange={e => setSettings({ ...settings, scanCacheTtlMinutes: Number(e.target.value) })}
-                      className="w-full engraved-input text-sm px-3 py-2"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="field-label">Concurrency</label>
-                    <input
-                      type="number"
-                      min={1}
-                      max={10}
-                      value={settings.concurrency}
-                      onChange={e => setSettings({ ...settings, concurrency: Number(e.target.value) })}
-                      className="w-full engraved-input text-sm px-3 py-2"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="field-label">Max File Size (bytes)</label>
-                    <input
-                      type="number"
-                      min={0}
-                      value={settings.fileTooLargeBytes ?? ''}
-                      onChange={e => setSettings({ ...settings, fileTooLargeBytes: e.target.value ? Number(e.target.value) : undefined })}
-                      placeholder="No limit"
-                      className="w-full engraved-input text-sm px-3 py-2"
-                    />
-                    <p className="text-xs text-on-surface-variant">Files larger than this will be skipped</p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Path Exclusions */}
-              <div className="bg-surface-container rounded-lg p-6 space-y-4">
-                <div>
-                  <h2 className="text-sm font-semibold text-on-surface">Path Exclusions</h2>
-                  <p className="text-xs text-on-surface-variant mt-0.5">Files containing these patterns will be skipped</p>
-                </div>
-                <div className="flex flex-wrap gap-2 min-h-8">
-                  {settings.pathContainsExclusions.map((entry, idx) => (
-                    <span
-                      key={idx}
-                      className="flex items-center gap-1.5 bg-surface-container-high border border-outline-variant/30 px-2.5 py-1 rounded text-xs font-mono text-on-surface"
-                    >
-                      {entry}
-                      <button
-                        onClick={() => {
-                          const updated = settings.pathContainsExclusions.filter((_, i) => i !== idx);
-                          setSettings({ ...settings, pathContainsExclusions: updated });
-                        }}
-                        className="text-on-surface-variant hover:text-error transition-colors"
-                      >
-                        <span className="material-symbols-outlined text-[14px]">close</span>
-                      </button>
-                    </span>
-                  ))}
-                  {settings.pathContainsExclusions.length === 0 && (
-                    <span className="text-xs text-on-surface-variant/50">No exclusions configured</span>
-                  )}
-                </div>
-                <div className="flex gap-2">
-                  <input
-                    value={newExclusion}
-                    onChange={e => setNewExclusion(e.target.value)}
-                    onKeyDown={e => {
-                      if (e.key === 'Enter' && newExclusion.trim()) {
-                        setSettings({ ...settings, pathContainsExclusions: [...settings.pathContainsExclusions, newExclusion.trim()] });
-                        setNewExclusion('');
-                      }
-                    }}
-                    placeholder="e.g. /pre-rolls/ then press Enter"
-                    className="flex-1 engraved-input text-sm px-3 py-2 font-mono"
-                  />
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    iconLeft="add"
-                    onClick={() => {
-                      if (newExclusion.trim()) {
-                        setSettings({ ...settings, pathContainsExclusions: [...settings.pathContainsExclusions, newExclusion.trim()] });
-                        setNewExclusion('');
-                      }
-                    }}
-                  >
-                    Add
-                  </Button>
-                </div>
-              </div>
-            </>
-          )}
-
-        </div>
-      </div>
-
-      {/* Footer Actions */}
-      <div className="flex flex-col-reverse md:flex-row md:items-center md:justify-between gap-3 pt-4 border-t border-outline-variant/15">
-        <div className="flex flex-wrap gap-3">
-          <button
-            onClick={() =>
-              void apiPost<{ accepted: boolean }>('/library/rescan')
-                .then((res) => {
-                  if (res.accepted) {
-                    success('Library rescan started');
-                  } else {
-                    success('Library scan is already running');
-                  }
-                })
-                .catch((err) => {
-                  toastError(
-                    err instanceof Error
-                      ? err.message
-                      : 'Failed to start library rescan',
-                  );
-                })
-            }
-            className="text-xs text-on-surface-variant hover:text-on-surface transition-colors flex items-center gap-1.5"
-          >
-            <span className="material-symbols-outlined text-[16px]">refresh</span>
-            Rescan Library
-          </button>
-          <button
-            onClick={() => void reset()}
-            className="text-xs text-on-surface-variant hover:text-error transition-colors flex items-center gap-1.5"
-          >
-            <span className="material-symbols-outlined text-[16px]">restart_alt</span>
-            Reset to Defaults
-          </button>
-        </div>
-        <Button
-          variant="primary"
-          loading={saving}
-          iconLeft={saving ? undefined : 'save'}
-          onClick={() => void save()}
-          className="w-full md:w-auto justify-center"
-        >
-          {saving ? 'Saving…' : 'Save Settings'}
-        </Button>
-      </div>
-    </section>
-  );
+  return <section className="space-y-6 pb-28">
+    <MobilePageHeader title="Settings" subtitle="Translation, scanning, automation and integrations" />
+    <h1 className="hidden md:block text-2xl font-bold text-on-surface">Settings</h1>
+    {!!settings.secretWarnings?.length && <div role="alert" className="rounded-lg border border-warning/40 bg-surface-container p-4 text-warning space-y-2"><h2 className="text-sm font-semibold">Saved credentials need attention</h2><p className="text-xs">Unreadable saved keys have not been removed or changed. Enter a replacement in its provider or integration field to repair it; leaving its input blank preserves the stored value.</p><ul className="list-disc pl-5 text-sm">{settings.secretWarnings.map((warning, index) => <li key={`${warning.field}-${index}`}><span className="font-semibold">{warning.field}</span>: {warning.message}</li>)}</ul></div>}
+    <SettingsField label="Search settings"><input type="search" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search sections or fields…" className={settingsInputClass} /></SettingsField>
+    <div className="flex flex-col lg:flex-row gap-6">
+      <nav aria-label="Settings sections" className="flex lg:flex-col gap-1 overflow-x-auto lg:w-52 shrink-0">
+        {SECTIONS.map(section => <button type="button" key={section.id} onClick={() => { setActive(section.id); setSearch(''); }} aria-current={active === section.id && !search ? 'page' : undefined} className={`shrink-0 rounded-lg px-3 py-2 text-sm text-left ${active === section.id && !search ? 'bg-primary/10 text-primary' : 'text-on-surface-variant hover:bg-surface-container-high'}`}>{section.label}</button>)}
+      </nav>
+      <form ref={form} onSubmit={event => { event.preventDefault(); void save(); }} className="min-w-0 flex-1 space-y-6">
+        <fieldset disabled={busy} className="space-y-6 min-w-0">
+          {search && !matched.length && <p role="status">No settings match “{search}”. Try a provider, language, folder or integration name.</p>}
+          {show('providers') && <>
+            <Panel title="Translation providers"><p className="text-sm text-on-surface-variant">Keys are encrypted at rest automatically. Saved keys are never loaded into these inputs; no repeated key entry is needed.</p>{text('openRouterModel', 'OpenRouter model ID', 200)}{secret('openRouterApiKey', 'OpenRouter API key')}{text('deepSeekModel', 'DeepSeek model ID', 200)}{secret('deepSeekApiKey', 'DeepSeek API key')}</Panel>
+            <Panel title="Usage & monthly budget">
+              {budget.error ? <div role="alert" className="text-sm text-error">Budget status unavailable: {budget.error.message} <button type="button" onClick={budget.refetch} className="underline">Retry</button></div> : budget.data ? <p role="status" className={`text-sm ${budget.data.level === 'exceeded' ? 'text-error' : budget.data.level === 'warning' ? 'text-warning' : 'text-on-surface'}`}>This month: ${budget.data.spentUsd.toFixed(2)} spent / {budget.data.budgetUsd == null ? 'no budget set' : `$${budget.data.budgetUsd.toFixed(2)} budget`}{budget.data.ratio != null ? ` (${Math.round(budget.data.ratio * 100)}%)` : ''}.</p> : <p role="status" className="text-sm">Loading budget status…</p>}
+              <p className="text-xs text-on-surface-variant">At 80% you receive a warning. At 100%, automatic paid translations are blocked; manual paid translations require explicit confirmation. Running translations are not interrupted. Budget status uses saved pricing and settings.</p>
+              {numeric('monthlyBudgetUsd', 'Monthly budget (USD)', 1e6, { optional: true, hint: 'Leave empty for no monthly budget. Zero blocks paid automatic requests immediately.' })}
+              <div className="grid sm:grid-cols-2 gap-4">{numeric('dailyTokenLimitFree', 'Daily free token limit', 1e12, { optional: true, integer: true })}{numeric('dailyTokenLimitPaid', 'Daily paid token limit', 1e12, { optional: true, integer: true })}</div>
+              {usage.error ? <p role="alert" className="text-sm text-error">Usage unavailable: {usage.error.message} <button type="button" className="underline" onClick={usage.refetch}>Retry</button></p> : usage.data ? <p className="text-sm text-on-surface-variant">Free: {usage.data.free.totalTokens.toLocaleString()} tokens · Paid: {usage.data.paid.totalTokens.toLocaleString()} tokens · estimated provider spend ${usage.data.estimatedCostUsd.toFixed(4)}</p> : <p className="text-sm">Loading token usage…</p>}
+            </Panel>
+            <Panel title="DeepSeek model pricing"><p className="text-xs text-on-surface-variant">USD per million tokens. Update these values when your model pricing changes; no live pricing API is contacted.</p>{numeric('deepSeekInputCacheHitUsdPerMillion', 'Cache-hit input price', 1000)}{numeric('deepSeekInputCacheMissUsdPerMillion', 'Cache-miss input price', 1000)}{numeric('deepSeekOutputUsdPerMillion', 'Output price', 1000)}{text('pricingUpdatedAt', 'Pricing date', 10, 'Date of the pricing information (YYYY-MM-DD).', 'date')}{text('pricingSource', 'Pricing source URL', 2048, undefined, 'url')}</Panel>
+          </>}
+          {show('languages') && <Panel title="Languages & quality"><div className="grid sm:grid-cols-2 gap-4"><SettingsField label="Source language"><LanguageCombobox value={settings.sourceLanguage} onChange={value => update('sourceLanguage', value)} ariaLabel="Source language" /></SettingsField><SettingsField label="Target language"><LanguageCombobox value={settings.targetLanguage} onChange={value => update('targetLanguage', value)} ariaLabel="Target language" /></SettingsField></div><Toggle checked={settings.translationVerificationEnabled} onChange={value => update('translationVerificationEnabled', value)} label="Translation verification" description="Check translated language and retry rejected translations within the provider retry limits." /></Panel>}
+          {show('library') && <>
+            <Panel title="Media directories"><p className="text-xs text-on-surface-variant">Choose up to 32 directories inside the configured server media roots. At least one is required.</p>{settings.mediaDirs.map((directory, index) => <div className="flex items-start gap-2" key={index}><div className="flex-1 min-w-0"><PathBrowser value={directory} onChange={value => update('mediaDirs', settings.mediaDirs.map((entry, entryIndex) => entryIndex === index ? value : entry))} placeholder="Select a media directory…" /></div><Button type="button" variant="ghost" aria-label={`Remove directory ${index + 1}`} onClick={() => update('mediaDirs', settings.mediaDirs.filter((_, entryIndex) => entryIndex !== index))} disabled={settings.mediaDirs.length <= 1}>Remove</Button></div>)}<Button type="button" variant="secondary" disabled={settings.mediaDirs.length >= 32} onClick={() => update('mediaDirs', [...settings.mediaDirs, ''])}>Add directory</Button>{settings.mediaDirs.some(value => !value.trim()) && <p role="alert" className="text-xs text-error">Select a path for every directory before saving.</p>}{numeric('scanCacheTtlMinutes', 'Scan cache TTL (minutes)', 10080, { min: 1, integer: true })}{numeric('fileTooLargeBytes', 'Maximum file size (bytes)', Number.MAX_SAFE_INTEGER, { optional: true, integer: true, hint: 'Leave empty for no size limit.' })}<Button type="button" variant="secondary" onClick={() => void perform(async signal => { const result = await apiPost<{ accepted: boolean }>('/library/rescan', undefined, { signal }); if (!signal.aborted) success(result.accepted ? 'Library rescan started (using saved settings)' : 'A scan is already running'); })}>Rescan library</Button></Panel>
+            <Panel title="Skip rules">{rules.error && <p role="alert" className="text-sm text-error">Rule descriptions unavailable; saved rules remain unchanged. {rules.error.message} <button type="button" className="underline" onClick={rules.refetch}>Retry</button></p>}{!rules.data && !rules.error && <p>Loading rule descriptions…</p>}{rules.data?.map(definition => { const saved = settings.rules.find(rule => rule.id === definition.id); return <Toggle key={definition.id} checked={saved?.enabled ?? definition.enabled} onChange={enabled => update('rules', saved ? settings.rules.map(rule => rule.id === definition.id ? { ...rule, enabled } : rule) : [...settings.rules, { id: definition.id, enabled }])} label={definition.label} description={definition.description} />; })}</Panel>
+            <Panel title="Path exclusions"><p className="text-xs text-on-surface-variant">Skip files whose path contains any of these strings (maximum 200).</p><div className="flex flex-wrap gap-2">{settings.pathContainsExclusions.map((entry, index) => <span className="flex items-center gap-2 rounded bg-surface-container-high p-2 text-xs break-all" key={index}>{entry}<button type="button" aria-label={`Remove exclusion ${entry}`} onClick={() => update('pathContainsExclusions', settings.pathContainsExclusions.filter((_, entryIndex) => entryIndex !== index))}>×</button></span>)}</div><div className="flex gap-2"><input aria-label="New path exclusion" maxLength={500} value={newExclusion} onChange={event => setNewExclusion(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); if (newExclusion.trim() && settings.pathContainsExclusions.length < 200) { update('pathContainsExclusions', [...settings.pathContainsExclusions, newExclusion.trim()]); setNewExclusion(''); } } }} className={settingsInputClass} /><Button type="button" variant="secondary" disabled={!newExclusion.trim() || settings.pathContainsExclusions.length >= 200} onClick={() => { update('pathContainsExclusions', [...settings.pathContainsExclusions, newExclusion.trim()]); setNewExclusion(''); }}>Add</Button></div></Panel>
+          </>}
+          {show('automation') && <Panel title="Scheduled scanning & translation"><Toggle checked={settings.autoScanEnabled} onChange={value => update('autoScanEnabled', value)} label="Enable scheduled rescan" description="Runs in the server timezone, with a minimum interval of 5 minutes." />{text('autoScanCronExpression', 'Cron expression', 100, 'Five fields: minute hour day month weekday; or six fields with seconds first. Every six hours: 0 */6 * * *. Schedule syntax and frequency are checked when scheduled scanning is enabled.')}<Toggle checked={settings.autoTranslateNewItems} onChange={value => update('autoTranslateNewItems', value)} label="Automatically translate new items" description="New media found by scheduled scans is queued only when language defaults and skip rules allow. Automatic paid jobs stop at the monthly budget." /></Panel>}
+          {show('integrations') && <>
+            <Panel title="Jellyfin & TMDB metadata">{text('jellyfinUrl', 'Jellyfin URL', 2048, 'Changing the server URL clears its saved API key unless you supply a new key.', 'url')}{secret('jellyfinApiKey', 'Jellyfin API key')}{secret('tmdbApiKey', 'TMDB API key')}<p className="text-xs text-on-surface-variant">Used for media metadata and rename suggestions. Connection tests use saved settings; save changes first.</p><Button type="button" variant="secondary" disabled={connectionBusy || dirty} onClick={() => void checkConnection('jellyfin')}>Test saved Jellyfin connection</Button>{connection(jellyfinStatus)}</Panel>
+            <Panel title="Telegram notifications"><Toggle checked={settings.telegramEnabled} onChange={value => update('telegramEnabled', value)} label="Enable Telegram notifications" />{secret('telegramBotToken', 'Telegram bot token')}{text('telegramChatId', 'Telegram chat ID', 100, 'Create a bot using @BotFather, send it a message, then provide your user or group chat ID.')}{EVENTS.map(([id, label]) => <Toggle key={id} checked={settings.telegramEvents.includes(id)} onChange={enabled => update('telegramEvents', enabled ? [...settings.telegramEvents, id] : settings.telegramEvents.filter(event => event !== id))} label={label} />)}<p className="text-xs text-on-surface-variant">Save before checking the connection or sending a test message.</p><div className="flex flex-wrap gap-2"><Button type="button" variant="secondary" disabled={connectionBusy || dirty} onClick={() => void checkConnection('telegram')}>Check saved connection</Button><Button type="button" variant="secondary" disabled={connectionBusy || dirty} onClick={() => void checkConnection('telegram', true)}>Send test message</Button></div>{connection(telegramStatus)}</Panel>
+          </>}
+          {show('advanced') && <>
+            <Panel title="Processing">{numeric('concurrency', 'Concurrent jobs', 16, { min: 1, integer: true })}</Panel>
+            <Panel title="Configuration backup"><p className="text-sm text-on-surface-variant">Export and import settings, translation profiles and glossary as a ZIP. Import limit: 2 MiB compressed, 8 MiB uncompressed. Imports replace saved configuration.</p><Toggle checked={includeSecrets} onChange={setIncludeSecrets} label="Include API keys and tokens in export" description="Off by default. When enabled the ZIP contains plaintext secrets: keep it private and never attach it to a public issue." /><Button type="button" variant="secondary" onClick={() => void exportSettings()}>Export saved configuration</Button>{dirty && <p className="text-xs text-warning">Exports contain saved settings, not unsaved edits.</p>}<SettingsField label="Import configuration ZIP"><input type="file" accept=".zip,application/zip" className="block w-full text-sm" onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void importSettings(file); }} /></SettingsField></Panel>
+            <Panel title="Reset settings"><p className="text-sm text-on-surface-variant">Restore settings defaults. This replaces your saved configuration and discards unsaved settings.</p><Button type="button" variant="secondary" onClick={() => setConfirmAction('reset')}>Reset to defaults…</Button></Panel>
+          </>}
+        </fieldset>
+      </form>
+    </div>
+    {actionError && <div role="alert" className="rounded-lg border border-error/30 bg-surface-container p-4 text-error"><p>{actionError}</p><p className="mt-1 text-xs">Your form is preserved. Correct the problem and retry the action.</p></div>}
+    {(dirty || busy) && <div className="sticky bottom-[calc(84px+env(safe-area-inset-bottom))] md:bottom-3 z-20 rounded-lg border border-outline-variant bg-surface-container-high p-3 shadow-xl flex flex-wrap items-center justify-between gap-3" role="region" aria-label="Unsaved settings"><p className="text-sm" aria-live="polite">{busy ? 'Applying request…' : 'You have unsaved changes'}</p><div className="flex gap-2"><Button type="button" variant="ghost" disabled={busy} onClick={() => setConfirmAction('discard')}>Discard</Button><Button type="button" loading={busy} disabled={busy} onClick={() => { if (settings.mediaDirs.some(value => !value.trim())) { setActionError('Every media directory needs a path.'); setActive('library'); setSearch(''); return; } void save(); }}>Save settings</Button></div></div>}
+    <Dialog open={confirmAction !== null} onClose={() => { if (!busy) setConfirmAction(null); }} title={confirmAction === 'reset' ? 'Reset settings to defaults?' : 'Discard unsaved changes?'}>
+      <p className="text-sm text-on-surface-variant">{confirmAction === 'reset' ? 'Saved settings will be replaced with defaults. This cannot be undone unless you have a configuration backup.' : 'Your changes and newly entered API keys will be removed from this form.'}</p>
+      {confirmAction === 'reset' && actionError && <p role="alert" className="mt-3 text-sm text-error">{actionError} Your form is preserved. Retry reset or cancel.</p>}
+      <div className="mt-5 flex justify-end gap-2"><Button type="button" variant="ghost" disabled={busy} onClick={() => setConfirmAction(null)}>Cancel</Button><Button type="button" disabled={busy} onClick={() => { if (confirmAction === 'discard') { const previous = JSON.parse(baseline) as { settings: SettingsPayload }; adopt(previous.settings); setActionError(''); setConfirmAction(null); } else { void perform(async signal => { await apiPost('/settings/reset', undefined, { signal }); const value = await apiGet<SettingsPayload>('/settings', { signal }); if (!signal.aborted) { adopt(value); setConfirmAction(null); success('Settings reset to defaults'); budget.refetch(); } }); } }}>Confirm {confirmAction === 'reset' ? 'reset' : 'discard'}</Button></div>
+    </Dialog>
+  </section>;
 }

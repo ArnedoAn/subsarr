@@ -1,196 +1,59 @@
-"use client";
+'use client';
 
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useId, useRef, useState } from 'react';
+import { apiGet } from '@/lib/api';
 
-interface PathBrowserProps {
-  value: string;
-  onChange: (path: string) => void;
-  placeholder?: string;
-}
+interface PathBrowserProps { value: string; onChange: (path: string) => void; placeholder?: string }
+interface FileSystemEntry { name: string; isDirectory: boolean; path: string }
 
-interface FileSystemEntry {
-  name: string;
-  isDirectory: boolean;
-  path: string;
-}
-
-// Mock API function
-const fetchDirectory = async (currentPath: string): Promise<FileSystemEntry[]> => {
-  try {
-    const response = await fetch(`/api/system/directory?path=${encodeURIComponent(currentPath)}`);
-    if (!response.ok) {
-      throw new Error('Failed to fetch directory');
-    }
-    return await response.json();
-  } catch (error) {
-    console.error('Error fetching directory:', error);
-    
-    // Fallback Mock data
-    const base = currentPath === "" || currentPath === "/" ? "/" : currentPath.replace(/\/$/, "") + "/";
-    
-    if (base === "/") {
-      return [
-        { name: "data", isDirectory: true, path: "/data" },
-        { name: "media", isDirectory: true, path: "/media" },
-        { name: "mnt", isDirectory: true, path: "/mnt" },
-      ];
-    }
-    return [];
-  }
-};
-
-export function PathBrowser({ value, onChange, placeholder = "Select path..." }: PathBrowserProps) {
-  const [isOpen, setIsOpen] = useState(false);
+export function PathBrowser({ value, onChange, placeholder = 'Enter a path or browse…' }: PathBrowserProps) {
+  const [open, setOpen] = useState(false);
+  const [path, setPath] = useState('');
   const [entries, setEntries] = useState<FileSystemEntry[]>([]);
   const [loading, setLoading] = useState(false);
-  const [currentPath, setCurrentPath] = useState(value || "/");
-  const [inputValue, setInputValue] = useState(value || "");
-  const wrapperRef = useRef<HTMLDivElement>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const wrapper = useRef<HTMLDivElement>(null);
+  const request = useRef<AbortController | null>(null);
+  const listId = useId();
 
-  useEffect(() => {
-    setInputValue(value);
-  }, [value]);
-
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (wrapperRef.current && !wrapperRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
-
-  const loadDirectory = async (path: string) => {
-    setLoading(true);
+  const load = async (nextPath: string) => {
+    request.current?.abort();
+    const controller = new AbortController();
+    request.current = controller;
+    setPath(nextPath); setLoading(true); setLoaded(false); setError(null); setEntries([]);
     try {
-      const data = await fetchDirectory(path);
-      setEntries(data);
-      setCurrentPath(path);
-    } catch (error) {
-      console.error("Failed to load directory", error);
-    } finally {
-      setLoading(false);
-    }
+      const result = await apiGet<FileSystemEntry[]>(`/system/directory?path=${encodeURIComponent(nextPath)}`, { signal: controller.signal });
+      if (!controller.signal.aborted) { setEntries(result); setLoaded(true); }
+    } catch (cause) {
+      if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : 'Unable to list this directory');
+    } finally { if (!controller.signal.aborted) setLoading(false); }
   };
-
-  const handleOpen = () => {
-    setIsOpen(true);
-    if (entries.length === 0 || currentPath !== inputValue) {
-      loadDirectory(inputValue || "/");
-    }
-  };
-
-  const handleNavigate = (path: string, e?: React.MouseEvent) => {
-    if (e) e.stopPropagation();
-    loadDirectory(path);
-  };
-
-  const handleSelect = (path: string, e?: React.MouseEvent) => {
-    if (e) e.stopPropagation();
-    setInputValue(path);
-    onChange(path);
-    setIsOpen(false);
-  };
-
-  const handleNavigateUp = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (currentPath === "/" || currentPath === "") return;
-    const parts = currentPath.split("/").filter(Boolean);
-    parts.pop();
-    const parentPath = "/" + parts.join("/");
-    loadDirectory(parentPath);
-  };
-
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setInputValue(e.target.value);
-    onChange(e.target.value);
-  };
-
-  const directories = entries.filter((e) => e.isDirectory);
-
-  return (
-    <div className="relative w-full" ref={wrapperRef}>
-      <div className="relative">
-        <input
-          type="text"
-          value={inputValue}
-          onChange={handleInputChange}
-          onFocus={handleOpen}
-          placeholder={placeholder}
-          className="w-full engraved-input text-sm px-3 py-2.5 pr-10 text-on-surface"
-        />
-        <span
-          className="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 text-on-surface-variant cursor-pointer"
-          onClick={() => (isOpen ? setIsOpen(false) : handleOpen())}
-        >
-          folder_open
-        </span>
-      </div>
-
-      {isOpen && (
-        <div className="absolute z-50 w-full mt-2 bg-[var(--surface-container-high)] rounded-lg shadow-xl border-none overflow-hidden transition-all duration-200 ease-out">
-          {/* Current path + select button */}
-          <div className="flex items-center gap-2 px-3 py-2 bg-[var(--surface-container-highest)] border-b border-[var(--surface-variant)]">
-            <span className="material-symbols-outlined text-[16px] text-on-surface-variant flex-shrink-0">folder</span>
-            <span className="truncate flex-1 font-mono text-xs text-on-surface-variant">{currentPath}</span>
-            {loading && (
-              <span className="material-symbols-outlined animate-spin text-[16px] text-on-surface-variant">sync</span>
-            )}
-            <button
-              type="button"
-              onClick={() => handleSelect(currentPath)}
-              className="flex-shrink-0 flex items-center gap-1 text-xs font-medium px-2 py-1 rounded bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
-              title="Seleccionar esta carpeta"
-            >
-              <span className="material-symbols-outlined text-[14px]">check</span>
-              Seleccionar
-            </button>
-          </div>
-
-          <div className="max-h-64 overflow-y-auto custom-scrollbar">
-            {/* Navigate up */}
-            {currentPath !== "/" && currentPath !== "" && (
-              <div
-                className="flex items-center gap-3 p-3 hover:bg-[var(--surface-variant)] cursor-pointer transition-colors duration-200"
-                onClick={handleNavigateUp}
-              >
-                <span className="material-symbols-outlined text-lg text-on-surface-variant">arrow_upward</span>
-                <span className="text-sm text-on-surface-variant">.. (Subir un nivel)</span>
-              </div>
-            )}
-
-            {/* Only directories */}
-            {directories.map((entry) => (
-              <div
-                key={entry.path}
-                className="flex items-center gap-3 p-3 hover:bg-[var(--surface-variant)] group cursor-pointer transition-colors duration-200"
-                onClick={(e) => handleNavigate(entry.path, e)}
-              >
-                <span className="material-symbols-outlined text-lg text-primary">folder</span>
-                <span className="text-sm flex-1 truncate text-on-surface group-hover:text-primary">
-                  {entry.name}
-                </span>
-                {/* Enter icon */}
-                <span className="material-symbols-outlined text-[16px] text-on-surface-variant opacity-0 group-hover:opacity-100 transition-opacity">
-                  chevron_right
-                </span>
-              </div>
-            ))}
-
-            {!loading && directories.length === 0 && (
-              <div className="p-4 text-center text-sm text-on-surface-variant">
-                Carpeta vacía
-              </div>
-            )}
-          </div>
-
-          {/* Footer hint */}
-          <div className="px-3 py-2 border-t border-[var(--surface-variant)] text-[11px] text-on-surface-variant bg-[var(--surface-container-highest)]">
-            Haz clic en una carpeta para entrar · pulsa <strong>Seleccionar</strong> para usar la carpeta actual
-          </div>
-        </div>
-      )}
+  const close = () => { setOpen(false); request.current?.abort(); };
+  useEffect(() => {
+    const outside = (event: MouseEvent) => { if (!wrapper.current?.contains(event.target as Node)) { setOpen(false); request.current?.abort(); } };
+    document.addEventListener('mousedown', outside);
+    return () => { document.removeEventListener('mousedown', outside); request.current?.abort(); };
+  }, []);
+  const browse = () => { setOpen(true); void load(value || ''); };
+  return <div ref={wrapper} className="relative w-full" onKeyDown={event => { if (event.key === 'Escape') close(); }}>
+    <div className="flex gap-2">
+      <input type="text" aria-label="Directory path" value={value} onChange={event => { onChange(event.target.value); if (open) close(); }} placeholder={placeholder} className="engraved-input min-w-0 flex-1 px-3 py-2.5 text-sm" />
+      <button type="button" className="btn btn-secondary" aria-expanded={open} aria-controls={listId} onClick={open ? close : browse}>Browse</button>
     </div>
-  );
+    {open && <div id={listId} className="absolute z-50 mt-2 w-full rounded-lg border border-outline-variant bg-surface-container-high shadow-xl">
+      <div className="flex items-center gap-2 p-3 border-b border-outline-variant/30">
+        <span className="min-w-0 flex-1 truncate font-mono text-xs" title={path}>{path || 'Configured media roots'}</span>
+        <button type="button" className="btn btn-ghost btn-xs" onClick={() => void load('')}>Roots</button>
+        <button type="button" disabled={!path || !loaded || loading || !!error} className="btn btn-primary btn-xs" onClick={() => { onChange(path); close(); }}>Select</button>
+      </div>
+      <div className="max-h-64 overflow-y-auto p-2" aria-busy={loading}>
+        {loading && <p role="status" className="p-3 text-sm">Loading directories…</p>}
+        {error && <div role="alert" className="p-3 text-sm text-error"><p>{error}</p><button type="button" className="btn btn-secondary mt-2" onClick={() => void load(path)}>Retry</button></div>}
+        {!loading && !error && loaded && entries.filter(entry => entry.isDirectory).length === 0 && <p className="p-3 text-sm text-on-surface-variant">No subdirectories</p>}
+        {!loading && !error && entries.filter(entry => entry.isDirectory).map(entry => <button type="button" key={entry.path} className="flex w-full items-center gap-2 rounded p-3 text-left text-sm hover:bg-surface-container-highest" onClick={() => void load(entry.path)}><span aria-hidden="true">▸</span><span className="truncate">{entry.name}</span></button>)}
+      </div>
+      <p className="border-t border-outline-variant/30 p-3 text-xs text-on-surface-variant">Manual paths are checked when saved. Browse only lists accessible configured media roots.</p>
+    </div>}
+  </div>;
 }

@@ -1,3 +1,5 @@
+import { COMMON_LANGUAGES, normalizeLanguageCode } from './languages';
+
 const STORAGE_KEY = 'subsarr-recent-languages';
 const MAX = 5;
 
@@ -7,7 +9,7 @@ export function getRecentLanguages(): string[] {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as string[]) : [];
+    return Array.isArray(parsed) ? [...new Set(parsed.filter((code): code is string => typeof code === 'string').map(normalizeLanguageCode))].filter(code => COMMON_LANGUAGES.some(language => language.code === code)).slice(0, MAX) : [];
   } catch {
     return [];
   }
@@ -15,6 +17,8 @@ export function getRecentLanguages(): string[] {
 
 export function pushRecentLanguage(code: string): void {
   if (typeof window === 'undefined') return;
+  code = normalizeLanguageCode(code);
+  if (!COMMON_LANGUAGES.some(language => language.code === code)) return;
   try {
     const prev = getRecentLanguages().filter((c) => c !== code);
     const next = [code, ...prev].slice(0, MAX);

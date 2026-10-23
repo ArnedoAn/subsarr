@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
+import { languageSearchText, normalizeLanguageCode, normalizeSearch } from '@/lib/languages';
 
 export type ComboboxOption = { value: string; label: string; hint?: string };
 
@@ -51,17 +52,15 @@ export function Combobox({
   const wrapperRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const listId = useId();
 
-  const selected = options.find((o) => o.value === value);
+  const selected = options.find((o) => o.value === value) ?? options.find(o => o.value === normalizeLanguageCode(value));
 
   const filterOption = (o: ComboboxOption) => {
     if (!query) return true;
-    const q = query.toLowerCase();
-    return (
-      o.label.toLowerCase().includes(q) ||
-      o.value.toLowerCase().includes(q) ||
-      (o.hint ?? '').toLowerCase().includes(q)
-    );
+    const q = normalizeSearch(query);
+    return normalizeSearch(`${o.label} ${o.value} ${o.hint ?? ''} ${languageSearchText(o.value)}`).includes(q);
   };
 
   const pinned = pinnedValues
@@ -91,26 +90,34 @@ export function Combobox({
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
+  useEffect(() => {
+    if (open) inputRef.current?.focus();
+  }, [open]);
+
   const openDropdown = () => {
     if (disabled) return;
     setQuery('');
-    setActiveIdx(-1);
+    const ordered = [...pinnedValues.flatMap(pinnedValue => options.filter(option => option.value === pinnedValue)), ...options.filter(option => !pinnedValues.includes(option.value))];
+    setActiveIdx(Math.max(0, ordered.findIndex(option => option.value === selected?.value)));
     setOpen(true);
-    setTimeout(() => inputRef.current?.focus(), 0);
   };
 
   const select = (val: string) => {
     onChange(val);
     setOpen(false);
     setQuery('');
+    triggerRef.current?.focus();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (!open) {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDropdown(); }
+      if (['Enter', ' ', 'ArrowDown', 'ArrowUp'].includes(e.key)) { e.preventDefault(); openDropdown(); }
       return;
     }
-    if (e.key === 'Escape') { setOpen(false); return; }
+    if (e.key === 'Escape') { e.preventDefault(); setOpen(false); triggerRef.current?.focus(); return; }
+    if (e.key === 'Tab') { setOpen(false); return; }
+    if (e.key === 'Home') { e.preventDefault(); setActiveIdx(0); return; }
+    if (e.key === 'End') { e.preventDefault(); setActiveIdx(flatOptions.length - 1); return; }
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       setActiveIdx((i) => Math.min(i + 1, flatOptions.length - 1));
@@ -128,7 +135,7 @@ export function Combobox({
     if (activeIdx < 0 || !listRef.current) return;
     const li = listRef.current.querySelectorAll<HTMLLIElement>('li[role="option"]')[activeIdx];
     li?.scrollIntoView({ block: 'nearest' });
-  }, [activeIdx]);
+  }, [activeIdx, open]);
 
   const displayLabel = selected ? selected.label : placeholder;
 
@@ -136,6 +143,8 @@ export function Combobox({
     <div className="relative w-full" ref={wrapperRef}>
       <button
         type="button"
+        ref={triggerRef}
+        aria-controls={open ? listId : undefined}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={ariaLabel}
@@ -178,7 +187,13 @@ export function Combobox({
                 ref={inputRef}
                 type="text"
                 value={query}
-                onChange={(e) => { setQuery(e.target.value); setActiveIdx(-1); }}
+                role="combobox"
+                aria-label={ariaLabel ?? placeholder}
+                aria-expanded={open}
+                aria-controls={listId}
+                aria-autocomplete="list"
+                aria-activedescendant={activeIdx >= 0 && flatOptions[activeIdx] ? `${listId}-${activeIdx}` : undefined}
+                onChange={(e) => { setQuery(e.target.value); setActiveIdx(0); }}
                 onKeyDown={handleKeyDown}
                 placeholder={placeholder}
                 className="w-full engraved-input text-xs px-2 py-1.5 pl-7"
@@ -189,6 +204,8 @@ export function Combobox({
           {/* Option list */}
           <ul
             ref={listRef}
+            id={listId}
+            aria-label={ariaLabel ?? placeholder}
             role="listbox"
             className="max-h-60 overflow-y-auto custom-scrollbar py-1"
           >
@@ -205,13 +222,15 @@ export function Combobox({
               }
               const optIdx = flatOptions.indexOf(item);
               const isActive = optIdx === activeIdx;
-              const isSelected = item.value === value;
+              const isSelected = item.value === selected?.value;
               return (
                 <li
                   key={`${item.value}-${rawIdx}`}
                   role="option"
+                  id={`${listId}-${optIdx}`}
                   aria-selected={isSelected}
-                  onMouseDown={(e) => { e.preventDefault(); select(item.value); }}
+                  onClick={() => select(item.value)}
+                  onMouseDown={e => e.preventDefault()}
                   onMouseEnter={() => setActiveIdx(optIdx)}
                   className={`flex items-center gap-2 px-3 py-2 cursor-pointer text-xs transition-colors ${
                     isActive ? 'bg-surface-container-highest' : 'hover:bg-surface-container-highest/60'

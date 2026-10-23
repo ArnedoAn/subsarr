@@ -1,372 +1,63 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { apiGet } from '@/lib/api';
-import { type LibraryScanStatus } from '@/lib/types';
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Legend,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
-import { MobilePageHeader } from '@/components/mobile/page-header';
+import Link from 'next/link';
+import { useEffect, useState } from 'react';
+import { useApiQuery } from '@/lib/use-api-query';
+import type { BudgetStatus, LibraryScanStatus } from '@/lib/types';
+import { Button } from '@/components/ui/button';
+import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
-type TierBlock = {
-  promptTokens: number;
-  completionTokens: number;
-  totalTokens: number;
-};
-
-export type DashboardStats = {
+type TierBlock = { promptTokens: number; completionTokens: number; totalTokens: number };
+export interface DashboardStats {
   libraryItemCount: number | null;
   libraryScan: LibraryScanStatus;
   jobsByState: Record<string, number>;
-  jobsSummary: {
-    today: { completed: number; failed: number; cancelled: number; total: number };
-    week: { completed: number; failed: number; cancelled: number; total: number };
-    archiveTotal: number;
-  };
-  jobsByDay: Array<{
-    date: string;
-    completed: number;
-    failed: number;
-    cancelled: number;
-  }>;
+  jobsSummary: { today: { completed: number; failed: number; cancelled: number; total: number }; week: { completed: number; failed: number; cancelled: number; total: number }; archiveTotal: number };
+  jobsByDay: Array<{ date: string; completed: number; failed: number; cancelled: number }>;
   tokensByDay: Array<{ date: string; free: number; paid: number }>;
-  tokenUsage: {
-    free: TierBlock;
-    paid: TierBlock;
-    deepSeekEstimatedCostUsd: number;
-  };
-  queue: {
-    ok: boolean;
-    jobCounts?: Record<string, number>;
-    error?: string;
-  };
+  tokenUsage: { free: TierBlock; paid: TierBlock; estimatedCostUsd: number };
+  queue: { ok: boolean; jobCounts?: Record<string, number>; error?: string };
   memory: { heapUsed: number; heapTotal: number; rss: number };
   uptimeSeconds: number;
-};
-
-const CHART_AXIS = '#737373';
-const CHART_GRID = '#2a2a2a';
-const COLORS = {
-  completed: '#4ade80',
-  failed: '#ec7c8a',
-  cancelled: '#fbbf24',
-  free: '#818cf8',
-  paid: '#34d399',
-};
-
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  const kb = n / 1024;
-  if (kb < 1024) return `${kb.toFixed(1)} KiB`;
-  const mb = kb / 1024;
-  if (mb < 1024) return `${mb.toFixed(1)} MiB`;
-  return `${(mb / 1024).toFixed(2)} GiB`;
 }
-
-function formatUptime(sec: number): string {
-  const d = Math.floor(sec / 86400);
-  const h = Math.floor((sec % 86400) / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  if (d > 0) return `${d}d ${h}h ${m}m`;
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
-}
-
-function shortDate(iso: string): string {
-  return iso.slice(5);
-}
+const SERIES = { completed: 'var(--success)', failed: 'var(--error)', cancelled: 'var(--warning)', free: 'var(--primary)', paid: 'var(--secondary)' };
+const tooltipStyle = { background: 'var(--surface-container-high)', border: '1px solid var(--outline-variant)', borderRadius: 8, color: 'var(--on-surface)' };
 
 export default function DashboardPage() {
-  const [data, setData] = useState<DashboardStats | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const s = await apiGet<DashboardStats>('/stats');
-        if (!cancelled) {
-          setData(s);
-          setErr(null);
-        }
-      } catch (e) {
-        if (!cancelled) {
-          setErr(e instanceof Error ? e.message : 'Error');
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const queuePie = useMemo(() => {
-    if (!data?.queue.ok || !data.queue.jobCounts) return [];
-    return Object.entries(data.queue.jobCounts)
-      .filter(([, v]) => v > 0)
-      .map(([name, value]) => ({ name, value }));
-  }, [data]);
-
-  const pieColors = ['#818cf8', '#34d399', '#fbbf24', '#ec7c8a', '#94a3b8', '#c084fc'];
-
-  const jobsChartData = useMemo(
-    () =>
-      (data?.jobsByDay ?? []).map((r) => ({
-        ...r,
-        label: shortDate(r.date),
-      })),
-    [data],
-  );
-
-  const tokensChartData = useMemo(
-    () =>
-      (data?.tokensByDay ?? []).map((r) => ({
-        ...r,
-        label: shortDate(r.date),
-      })),
-    [data],
-  );
-
-  if (err) {
-    return (
-      <div className="rounded-xl border border-error/30 bg-error/8 px-4 py-3 text-sm text-error">
-        {err}
+  const stats = useApiQuery<DashboardStats>('/stats', { intervalMs: 30000 });
+  const budget = useApiQuery<BudgetStatus>('/settings/budget', { intervalMs: 30000 });
+  const [lastSuccess, setLastSuccess] = useState<number | null>(null);
+  useEffect(() => { if (stats.data && !stats.error) setLastSuccess(Date.now()); }, [stats.data, stats.error]);
+  const data = stats.data;
+  const queue = data?.queue.jobCounts;
+  return <section className="space-y-6">
+    <header className="flex flex-wrap justify-between gap-3"><div><h1 className="text-2xl font-bold text-on-surface">Overview</h1><p className="text-sm text-on-surface-variant">Library, translation outcomes and monthly budget</p></div><Button variant="secondary" onClick={() => { stats.refetch(); budget.refetch(); }}>Refresh overview</Button></header>
+    <p role="status" className="text-xs text-on-surface-variant">{stats.error ? 'Statistics unavailable / stale' : stats.loading ? 'Loading statistics…' : stats.refreshing ? 'Refreshing statistics…' : 'Statistics updated'} · Last successful fetch: {lastSuccess ? new Date(lastSuccess).toLocaleString() : 'none yet'}</p>
+    {stats.error && <div role="alert" className="rounded-xl border border-error/30 p-4 text-error"><p>{stats.error.message}</p><Button variant="secondary" onClick={stats.refetch}>Retry statistics</Button></div>}
+    {!data && stats.loading && <div aria-busy="true" className="rounded-xl bg-surface-container p-8 text-center">Loading library and queue summaries…</div>}
+    {data && <>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <Summary title="Indexed media" value={data.libraryItemCount == null ? 'Unknown' : data.libraryItemCount.toLocaleString()} subtitle={data.libraryScan.state === 'running' ? 'Scan in progress · open library' : 'Browse and filter the library'} href="/" />
+        <Summary title="Needs attention" value={data.jobsSummary.week.failed.toLocaleString()} subtitle="Failed translations in the last 7 days · inspect and retry" href="/activity?tab=history&state=failed" />
+        <Summary title="Queue" value={data.queue.ok ? String((queue?.waiting ?? 0) + (queue?.active ?? 0) + (queue?.delayed ?? 0) + (queue?.cancelling ?? 0)) : 'Unavailable'} subtitle={data.queue.ok ? `${queue?.active ?? 0} active · manage translations` : data.queue.error ?? 'Unable to read the queue'} href="/activity" />
+        <Summary title="Completed today" value={String(data.jobsSummary.today.completed)} subtitle={`${data.jobsSummary.today.total} finished today · view history`} href="/activity?tab=history&state=completed" />
       </div>
-    );
-  }
-
-  if (!data) {
-    return (
-      <div className="flex items-center justify-center py-24 text-on-surface-variant text-sm">
-        Cargando estadísticas…
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-6 md:space-y-8">
-      <MobilePageHeader title="Dashboard" subtitle="KPIs, job trends, token usage, and queue health." />
-
-      <div className="hidden md:block">
-        <h1 className="text-2xl font-bold text-on-surface tracking-tight">Dashboard</h1>
-        <p className="text-sm text-on-surface-variant mt-1">
-          KPIs, tendencias de jobs y tokens, y estado de la cola.
-        </p>
-      </div>
-
-      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Kpi
-          title="Biblioteca"
-          value={data.libraryItemCount == null ? 'N/A' : String(data.libraryItemCount)}
-          subtitle={
-            data.libraryScan.state === 'running'
-              ? 'escaneo en progreso'
-              : 'items indexados'
-          }
-        />
-        <Kpi
-          title="Jobs hoy"
-          value={String(data.jobsSummary.today.total)}
-          subtitle={`${data.jobsSummary.today.completed} ok · ${data.jobsSummary.today.failed} fallos`}
-        />
-        <Kpi
-          title="Jobs (7 días)"
-          value={String(data.jobsSummary.week.total)}
-          subtitle={`${data.jobsSummary.week.completed} completados`}
-        />
-        <Kpi
-          title="Archivo jobs"
-          value={String(data.jobsSummary.archiveTotal)}
-          subtitle="snapshots totales"
-        />
-      </section>
-
-      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Kpi
-          title="Tokens free"
-          value={formatTokens(data.tokenUsage.free.totalTokens)}
-          subtitle={`prompt ${formatTokens(data.tokenUsage.free.promptTokens)}`}
-        />
-        <Kpi
-          title="Tokens paid"
-          value={formatTokens(data.tokenUsage.paid.totalTokens)}
-          subtitle={`completion ${formatTokens(data.tokenUsage.paid.completionTokens)}`}
-        />
-        <Kpi
-          title="Coste DeepSeek (est.)"
-          value={`$${data.tokenUsage.deepSeekEstimatedCostUsd.toFixed(4)}`}
-          subtitle="acumulado paid tier"
-        />
-        <Kpi
-          title="Estados archivo"
-          value={String(
-            (data.jobsByState.completed ?? 0) +
-              (data.jobsByState.failed ?? 0) +
-              (data.jobsByState.cancelled ?? 0),
-          )}
-          subtitle={`ok ${data.jobsByState.completed ?? 0} · fallo ${data.jobsByState.failed ?? 0}`}
-        />
-      </section>
-
+      {data.libraryScan.lastError && <div role="alert" className="rounded-xl border border-warning/30 p-4"><p className="text-warning">Last scan failed: {data.libraryScan.lastError}</p><p className="text-sm text-on-surface-variant">Last successful scan: {data.libraryScan.lastSuccessAt ? new Date(data.libraryScan.lastSuccessAt).toLocaleString() : 'none yet'}. Existing inventory is retained.</p><Link href="/?status=failed" className="btn btn-ghost mt-2">Review library issues</Link></div>}
       <div className="grid gap-6 lg:grid-cols-2">
-        <ChartCard title="Jobs por día (30 días)">
-          <div className="h-[220px] sm:h-[280px]">
-            <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={jobsChartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID} />
-              <XAxis dataKey="label" tick={{ fill: CHART_AXIS, fontSize: 10 }} interval={4} />
-              <YAxis tick={{ fill: CHART_AXIS, fontSize: 11 }} width={32} />
-              <Tooltip
-                contentStyle={{
-                  background: 'var(--surface-container-high)',
-                  border: '1px solid var(--outline-variant)',
-                  borderRadius: 8,
-                }}
-                labelStyle={{ color: 'var(--on-surface)' }}
-              />
-              <Legend />
-              <Bar dataKey="completed" stackId="a" fill={COLORS.completed} name="Completados" />
-              <Bar dataKey="failed" stackId="a" fill={COLORS.failed} name="Fallidos" />
-              <Bar dataKey="cancelled" stackId="a" fill={COLORS.cancelled} name="Cancelados" />
-            </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </ChartCard>
-
-        <ChartCard title="Tokens por día — free vs paid">
-          <div className="h-[220px] sm:h-[280px]">
-            <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={tokensChartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID} />
-              <XAxis dataKey="label" tick={{ fill: CHART_AXIS, fontSize: 10 }} interval={4} />
-              <YAxis tick={{ fill: CHART_AXIS, fontSize: 11 }} width={40} />
-              <Tooltip
-                contentStyle={{
-                  background: 'var(--surface-container-high)',
-                  border: '1px solid var(--outline-variant)',
-                  borderRadius: 8,
-                }}
-              />
-              <Legend />
-              <Bar dataKey="free" stackId="t" fill={COLORS.free} name="Free" />
-              <Bar dataKey="paid" stackId="t" fill={COLORS.paid} name="Paid" />
-            </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </ChartCard>
+        <Chart title="Translation outcomes · last 30 days" data={data.jobsByDay} keys={['completed', 'failed', 'cancelled']} />
+        <Chart title="Token usage · last 30 days" data={data.tokensByDay} keys={['free', 'paid']} />
       </div>
-
-      <div className="grid gap-6 lg:grid-cols-2">
-        <ChartCard title="Cola Bull (Redis)">
-          {data.queue.ok && queuePie.length > 0 ? (
-            <div className="h-[220px] sm:h-[260px]">
-              <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={queuePie}
-                  dataKey="value"
-                  nameKey="name"
-                  cx="50%"
-                  cy="50%"
-                  outerRadius={88}
-                  label={({ name, value }) => `${name}: ${value}`}
-                >
-                  {queuePie.map((_, i) => (
-                    <Cell key={i} fill={pieColors[i % pieColors.length]} />
-                  ))}
-                </Pie>
-                <Tooltip
-                  contentStyle={{
-                    background: 'var(--surface-container-high)',
-                    border: '1px solid var(--outline-variant)',
-                    borderRadius: 8,
-                  }}
-                />
-              </PieChart>
-              </ResponsiveContainer>
-            </div>
-          ) : (
-            <div className="h-[260px] flex flex-col items-center justify-center text-sm text-on-surface-variant px-4 text-center">
-              {data.queue.ok ? (
-                <span>Cola vacía (sin jobs pendientes).</span>
-              ) : (
-                <span className="text-warning">Cola no disponible: {data.queue.error}</span>
-              )}
-            </div>
-          )}
-        </ChartCard>
-
-        <div className="rounded-xl border border-outline-variant/25 bg-surface-container-low p-5">
-          <h3 className="text-sm font-semibold text-on-surface mb-4">Salud del proceso</h3>
-          <ul className="space-y-3 text-sm">
-            <li className="flex justify-between gap-4">
-              <span className="text-on-surface-variant">Redis / cola</span>
-              <span className={data.queue.ok ? 'text-success font-medium' : 'text-error font-medium'}>
-                {data.queue.ok ? 'OK' : 'Error'}
-              </span>
-            </li>
-            <li className="flex justify-between gap-4">
-              <span className="text-on-surface-variant">Uptime</span>
-              <span className="text-on-surface font-mono">{formatUptime(data.uptimeSeconds)}</span>
-            </li>
-            <li className="flex justify-between gap-4">
-              <span className="text-on-surface-variant">Heap usado</span>
-              <span className="text-on-surface font-mono">{formatBytes(data.memory.heapUsed)}</span>
-            </li>
-            <li className="flex justify-between gap-4">
-              <span className="text-on-surface-variant">Heap total</span>
-              <span className="text-on-surface font-mono">{formatBytes(data.memory.heapTotal)}</span>
-            </li>
-            <li className="flex justify-between gap-4">
-              <span className="text-on-surface-variant">RSS</span>
-              <span className="text-on-surface font-mono">{formatBytes(data.memory.rss)}</span>
-            </li>
-          </ul>
-        </div>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="rounded-xl border border-outline-variant/25 bg-surface-container p-5"><h2 className="font-semibold">Queue availability</h2><p className={stats.error || !data.queue.ok ? 'text-error' : 'text-on-surface'}>{stats.error ? 'Unknown · showing stale data' : data.queue.ok ? 'Queue reachable' : `Unavailable: ${data.queue.error ?? 'connection failed'}`}</p>{data.queue.ok && <dl className="mt-3 grid grid-cols-2 gap-2 text-sm">{Object.entries(queue ?? {}).map(([state, count]) => <div key={state}><dt className="text-on-surface-variant">{state}</dt><dd><Link className="underline" href={`/activity?tab=${['completed','failed','cancelled'].includes(state) ? 'history' : 'queue'}&state=${encodeURIComponent(state)}`}>{count}</Link></dd></div>)}</dl>}<Link className="btn btn-secondary mt-4" href="/activity?tab=logs&level=error">Inspect error logs</Link></div>
+        <div className="rounded-xl border border-outline-variant/25 bg-surface-container p-5"><h2 className="font-semibold">Process</h2><dl className="mt-3 space-y-2 text-sm"><div className="flex justify-between"><dt>Uptime</dt><dd>{Math.floor(data.uptimeSeconds / 3600)}h {Math.floor(data.uptimeSeconds % 3600 / 60)}m</dd></div><div className="flex justify-between"><dt>Heap used / allocated</dt><dd>{(data.memory.heapUsed / 1048576).toFixed(1)} / {(data.memory.heapTotal / 1048576).toFixed(1)} MiB</dd></div><div className="flex justify-between"><dt>Resident memory</dt><dd>{(data.memory.rss / 1048576).toFixed(1)} MiB</dd></div></dl><Link className="btn btn-ghost mt-4" href="/?missingTarget=true">Find media missing target subtitles</Link></div>
       </div>
-    </div>
-  );
+    </>}
+    <section className="rounded-xl border border-outline-variant/25 bg-surface-container p-5 space-y-2"><h2 className="font-semibold">Monthly translation budget</h2>{budget.error && <div role="alert" className="text-error"><p>Budget unavailable: {budget.error.message}</p><Button variant="secondary" onClick={budget.refetch}>Retry budget</Button></div>}{!budget.data && budget.loading && <p aria-busy="true">Loading budget…</p>}{budget.data && <><p className="text-xl font-bold">${budget.data.spentUsd.toFixed(2)}{budget.data.budgetUsd != null ? ` / $${budget.data.budgetUsd.toFixed(2)}` : ' · no monthly cap'}</p><p className={budget.error ? 'text-on-surface-variant' : budget.data.level === 'exceeded' ? 'text-error' : budget.data.level === 'warning' ? 'text-warning' : 'text-on-surface-variant'}>{budget.error ? 'Last known budget · not current' : budget.data.level === 'exceeded' ? 'Budget reached. Automatic paid requests are blocked; manual requests require an explicit override.' : budget.data.level === 'warning' ? 'At least 80% of the monthly budget used.' : 'Usage includes provider attempts, including retries.'}</p>{budget.data.ratio != null && <progress aria-label="Monthly budget used" max={1} value={Math.min(1, budget.data.ratio)} className="w-full accent-primary" />}</>}<Link className="btn btn-ghost" href="/settings">Manage budget and pricing</Link></section>
+  </section>;
 }
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return String(n);
+function Summary({ title, value, subtitle, href }: { title: string; value: string; subtitle: string; href: string }) {
+  return <Link href={href} className="rounded-xl border border-outline-variant/25 bg-surface-container p-4 hover:border-primary focus-visible:outline-2 focus-visible:outline-primary"><h2 className="text-xs text-on-surface-variant uppercase tracking-wide">{title}</h2><p className="text-2xl font-bold mt-1">{value}</p><p className="text-xs text-on-surface-variant mt-2">{subtitle}</p></Link>;
 }
-
-function Kpi({
-  title,
-  value,
-  subtitle,
-}: {
-  title: string;
-  value: string;
-  subtitle: string;
-}) {
-  return (
-    <div className="rounded-xl border border-outline-variant/25 bg-surface-container-low p-4">
-      <p className="text-xs font-medium text-on-surface-variant uppercase tracking-wide">{title}</p>
-      <p className="text-2xl font-bold text-on-surface mt-1 tabular-nums">{value}</p>
-      <p className="text-xs text-on-surface-variant mt-1">{subtitle}</p>
-    </div>
-  );
-}
-
-function ChartCard({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="rounded-xl border border-outline-variant/25 bg-surface-container-low p-5">
-      <h3 className="text-sm font-semibold text-on-surface mb-4">{title}</h3>
-      {children}
-    </div>
-  );
+function Chart({ title, data, keys }: { title: string; data: Array<{ date: string } & Partial<Record<keyof typeof SERIES, number>>>; keys: Array<keyof typeof SERIES> }) {
+  return <section className="rounded-xl border border-outline-variant/25 bg-surface-container p-4"><h2 className="text-sm font-semibold mb-4">{title}</h2>{data.length === 0 ? <p className="p-8 text-center text-on-surface-variant">No data for this period.</p> : <div className="h-64" role="img" aria-label={title}><ResponsiveContainer width="100%" height="100%"><BarChart data={data} margin={{ left: 0, right: 8, top: 8 }}><CartesianGrid stroke="var(--outline-variant)" strokeDasharray="3 3" /><XAxis dataKey="date" tickFormatter={value => String(value).slice(5)} tick={{ fill: 'var(--on-surface-variant)', fontSize: 10 }} interval={4} /><YAxis tick={{ fill: 'var(--on-surface-variant)', fontSize: 10 }} width={45} /><Tooltip contentStyle={tooltipStyle} /><Legend />{keys.map(key => <Bar key={key} dataKey={key} stackId="total" fill={SERIES[key]} />)}</BarChart></ResponsiveContainer></div>}<details className="mt-3 text-xs"><summary>View chart data</summary><div className="overflow-x-auto"><table className="w-full text-left"><caption className="sr-only">{title}</caption><thead><tr><th>Date</th>{keys.map(key => <th key={key}>{key}</th>)}</tr></thead><tbody>{data.map(row => <tr key={row.date}><td>{row.date}</td>{keys.map(key => <td key={key}>{String(row[key] ?? 0)}</td>)}</tr>)}</tbody></table></div></details></section>;
 }

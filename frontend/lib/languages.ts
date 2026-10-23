@@ -1,19 +1,13 @@
-export const COMMON_LANGUAGES = [
-  { code: 'eng', name: 'English' },
-  { code: 'spa', name: 'Spanish' },
-  { code: 'fra', name: 'French' },
-  { code: 'deu', name: 'German' },
-  { code: 'ita', name: 'Italian' },
-  { code: 'por', name: 'Portuguese' },
-  { code: 'rus', name: 'Russian' },
-  { code: 'jpn', name: 'Japanese' },
-  { code: 'zho', name: 'Chinese' },
-  { code: 'kor', name: 'Korean' },
-  { code: 'ara', name: 'Arabic' },
-  { code: 'hin', name: 'Hindi' },
-  { code: 'tur', name: 'Turkish' },
-  { code: 'pol', name: 'Polish' },
-  { code: 'swe', name: 'Swedish' },
-  { code: 'nld', name: 'Dutch' },
-  { code: 'und', name: 'Undetermined' },
+const catalog = [
+  ['eng','English','English','en'], ['spa','Spanish','Español','es'], ['fra','French','Français','fr fre'], ['deu','German','Deutsch','de ger'], ['ita','Italian','Italiano','it'], ['por','Portuguese','Português','pt'], ['rus','Russian','Русский','ru'], ['jpn','Japanese','日本語','ja'], ['zho','Chinese','中文 汉语','zh chi'], ['kor','Korean','한국어','ko'], ['ara','Arabic','العربية','ar'], ['hin','Hindi','हिन्दी','hi'], ['tur','Turkish','Türkçe','tr'], ['pol','Polish','Polski','pl'], ['swe','Swedish','Svenska','sv'], ['nld','Dutch','Nederlands','nl dut'], ['dan','Danish','Dansk','da'], ['fin','Finnish','Suomi','fi'], ['nor','Norwegian','Norsk','no nob nno nb nn'], ['ces','Czech','Čeština','cs cze'], ['slk','Slovak','Slovenčina','sk slo'], ['slv','Slovenian','Slovenščina','sl'], ['hrv','Croatian','Hrvatski','hr'], ['srp','Serbian','Српски','sr'], ['bos','Bosnian','Bosanski','bs'], ['bul','Bulgarian','Български','bg'], ['ron','Romanian','Română','ro rum'], ['hun','Hungarian','Magyar','hu'], ['ell','Greek','Ελληνικά','el gre'], ['ukr','Ukrainian','Українська','uk'], ['heb','Hebrew','עברית','he'], ['fas','Persian','فارسی','fa per'], ['urd','Urdu','اردو','ur'], ['ben','Bengali','বাংলা','bn'], ['tam','Tamil','தமிழ்','ta'], ['tel','Telugu','తెలుగు','te'], ['mal','Malayalam','മലയാളം','ml'], ['tha','Thai','ไทย','th'], ['vie','Vietnamese','Tiếng Việt','vi'], ['ind','Indonesian','Bahasa Indonesia','id'], ['msa','Malay','Bahasa Melayu','ms may'], ['fil','Filipino','Filipino Tagalog','tl tgl'], ['cat','Catalan','Català','ca'], ['eus','Basque','Euskara','eu baq'], ['glg','Galician','Galego','gl'], ['isl','Icelandic','Íslenska','is ice'], ['gle','Irish','Gaeilge','ga'], ['cym','Welsh','Cymraeg','cy wel'], ['est','Estonian','Eesti','et'], ['lav','Latvian','Latviešu','lv'], ['lit','Lithuanian','Lietuvių','lt'], ['sqi','Albanian','Shqip','sq alb'], ['mkd','Macedonian','Македонски','mk mac'], ['kat','Georgian','ქართული','ka geo'], ['hye','Armenian','Հայերեն','hy arm'], ['aze','Azerbaijani','Azərbaycan','az'], ['kaz','Kazakh','Қазақша','kk'], ['uzb','Uzbek','Oʻzbek','uz'], ['mon','Mongolian','Монгол','mn'], ['afr','Afrikaans','Afrikaans','af'], ['swa','Swahili','Kiswahili','sw'], ['zul','Zulu','isiZulu','zu'], ['nep','Nepali','नेपाली','ne'], ['sin','Sinhala','සිංහල','si'], ['khm','Khmer','ខ្មែរ','km'], ['lao','Lao','ລາວ','lo'], ['mya','Burmese','မြန်မာ','my bur'], ['und','Undetermined','Unknown','und'],
 ];
+export const COMMON_LANGUAGES = catalog.map(([code,name,nativeName,aliases]) => ({ code, name, nativeName, aliases: aliases.split(' ') }));
+export function normalizeSearch(value: string): string { return value.normalize('NFD').replace(/\p{M}/gu, '').toLocaleLowerCase().trim(); }
+export function normalizeLanguageCode(value: string): string {
+  const key = value.toLowerCase().trim();
+  return COMMON_LANGUAGES.find(language => language.code === key || language.aliases.includes(key))?.code ?? key;
+}
+export function languageSearchText(code: string): string {
+  const language = COMMON_LANGUAGES.find(item => item.code === normalizeLanguageCode(code));
+  return language ? `${language.name} ${language.nativeName} ${language.code} ${language.aliases.join(' ')}` : code;
+}

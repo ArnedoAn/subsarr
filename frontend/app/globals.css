@@ -234,11 +234,11 @@ html.light {
   --color-outline-variant:         var(--outline-variant);
 
   /* Typography */
-  --font-sans:      var(--font-geist-sans, var(--font-inter, 'Inter', sans-serif));
-  --font-mono:      var(--font-jetbrains-mono, 'JetBrains Mono', monospace);
-  --font-headline:  var(--font-geist-sans, var(--font-inter, 'Inter', sans-serif));
-  --font-body:      var(--font-inter, 'Inter', sans-serif);
-  --font-label:     var(--font-space-grotesk, 'Space Grotesk', sans-serif);
+  --font-sans:      system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono:      ui-monospace, 'Cascadia Code', Consolas, monospace;
+  --font-headline:  var(--font-sans);
+  --font-body:      var(--font-sans);
+  --font-label:     var(--font-sans);
 }
 
 /* ================================================
@@ -323,6 +323,7 @@ body {
 /* ================================================
    Buttons
    ================================================ */
+@layer components {
 .btn {
   display: inline-flex;
   align-items: center;
@@ -337,6 +338,7 @@ body {
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
+}
 }
 
 .btn:active {
@@ -634,3 +636,22 @@ body {
   background: currentColor;
   animation: pulse-ring 1.5s ease-out infinite;
 }
+
+/* Shared overlays and offline icon compatibility. */
+.shared-dialog {
+  margin: auto;
+  width: min(42rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  overflow: auto;
+  border: 1px solid var(--outline-variant);
+  border-radius: 0.75rem;
+  background: var(--surface-container);
+  color: var(--on-surface);
+  padding: 0;
+}
+.shared-dialog::backdrop { background: rgb(0 0 0 / 65%); }
+.material-symbols-outlined[data-local-icon] { font-size: 0 !important; display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; }
+.material-symbols-outlined[data-local-icon]::before { content: ''; display: inline-block; width: var(--icon-size, 20px); height: var(--icon-size, 20px); flex-shrink: 0; background: currentColor; mask: var(--local-icon) center / contain no-repeat; }
+.toast-region { bottom: calc(84px + env(safe-area-inset-bottom)); right: max(1rem, env(safe-area-inset-right)); left: max(1rem, env(safe-area-inset-left)); }
+@media (min-width: 768px) { .toast-region { bottom: max(1.5rem, env(safe-area-inset-bottom)); left: auto; width: min(24rem, calc(100vw - 2rem)); } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; } }

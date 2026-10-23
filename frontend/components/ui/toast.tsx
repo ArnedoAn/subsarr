@@ -60,13 +60,15 @@ function ToastItem({ toast, onRemove }: { toast: Toast; onRemove: (id: string) =
 
   return (
     <div
-      className={`flex items-center gap-3 min-w-[280px] max-w-sm px-4 py-3 rounded-lg border backdrop-blur-sm shadow-lg ${colors[toast.type]} ${exiting ? 'toast-exit' : 'toast-enter'}`}
+      className={`flex items-center gap-3 w-full max-w-sm min-w-0 px-4 py-3 rounded-lg border backdrop-blur-sm shadow-lg ${colors[toast.type]} ${exiting ? 'toast-exit' : 'toast-enter'}`}
     >
       <span className="material-symbols-outlined text-[20px] flex-shrink-0" style={{ fontVariationSettings: 'FILL 1' }}>
         {icons[toast.type]}
       </span>
-      <p className="text-sm font-medium flex-1 text-on-surface">{toast.message}</p>
+      <p className="text-sm font-medium flex-1 min-w-0 break-words text-on-surface">{toast.message}</p>
       <button
+        type="button"
+        aria-label="Dismiss notification"
         onClick={dismiss}
         className="material-symbols-outlined text-[18px] text-on-surface-variant hover:text-on-surface transition-colors flex-shrink-0"
       >
@@ -85,7 +87,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
 
   const addToast = useCallback((message: string, type: ToastType = 'info', duration?: number) => {
     const id = Math.random().toString(36).slice(2);
-    setToasts(prev => [...prev, { id, message, type, duration }]);
+    setToasts(prev => [...prev.slice(-4), { id, message, type, duration }]);
   }, []);
 
   const success = useCallback((m: string) => addToast(m, 'success'), [addToast]);
@@ -104,7 +106,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
       <div
         aria-live="polite"
         aria-label="Notifications"
-        className="fixed bottom-6 right-6 z-[9999] flex flex-col gap-2 items-end"
+        className="toast-region fixed z-[9999] flex flex-col gap-2 items-end pointer-events-none [&>*]:pointer-events-auto"
       >
         {toasts.map(t => (
           <ToastItem key={t.id} toast={t} onRemove={remove} />
