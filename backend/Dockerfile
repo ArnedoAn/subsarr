@@ -26,11 +26,12 @@ RUN pnpm install --frozen-lockfile --prod
 
 COPY --from=builder /app/dist ./dist
 
-# Add entrypoint script for PUID/PGID support
+# Entrypoint migrates app-data ownership when PUID/PGID are supplied, then drops root.
 COPY docker-entrypoint.sh /usr/local/bin/
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh && mkdir -p /data && chown node:node /data
 
 EXPOSE 3001
+HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=5 CMD wget -q --spider http://127.0.0.1:3001/health || exit 1
 
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["node", "dist/main"]

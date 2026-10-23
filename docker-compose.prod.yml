@@ -1,7 +1,14 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: '10m'
+    max-file: '3'
+
 services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    logging: *default-logging
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -11,12 +18,14 @@ services:
   api:
     image: ghcr.io/arnedoan/subsarr-backend:latest
     restart: unless-stopped
-    ports:
-      - '3001:3001'
+    logging: *default-logging
+    expose:
+      - '3001'
     environment:
-      PUID: ${PUID:-0}
-      PGID: ${PGID:-0}
+      PUID: ${PUID:-}
+      PGID: ${PGID:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      SUBSARR_SECRET_KEY: ${SUBSARR_SECRET_KEY:-}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
       REDIS_URL: redis://redis:6379
       SUBSYNC_MEDIA_DIRS: ${SUBSYNC_MEDIA_DIRS:-/media}
@@ -38,7 +47,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3001/settings"]
+      test: ['CMD', 'wget', '-q', '--spider', 'http://127.0.0.1:3001/health']
       interval: 10s
       timeout: 5s
       retries: 5
@@ -47,10 +56,11 @@ services:
   web:
     image: ghcr.io/arnedoan/subsarr-frontend:latest
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - '3000:3000'
     environment:
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3001}
+      NEXT_PUBLIC_API_URL: /api
       API_INTERNAL_URL: http://api:3001
       PORT: 3000
     depends_on:

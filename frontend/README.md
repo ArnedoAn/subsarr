@@ -1,36 +1,87 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Subsarr frontend
 
-## Getting Started
+Next.js 16 App Router. Interfaz para una instalación de confianza en LAN, sin
+login. Las credenciales de IA se guardan en el backend y no se vuelven a pedir
+por dispositivo o al abrir la página.
 
-First, run the development server:
+## Pantallas
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+- **Biblioteca** `/`: búsqueda, filtros y páginas en el backend; agrupación por
+  serie/temporada, películas y sin clasificar. Selección completa de grupos o
+  coincidencias mediante IDs, no limitada a la página cargada. Panel de detalle
+  reutilizado por `/library/[id]`, con pistas, sidecars, reglas e historial.
+- **Actividad** `/activity`: Cola, Historial y Logs. Reemplaza `/jobs` y `/archive`.
+  Estados desconectados/desactualizados no se presentan como una cola sana vacía.
+- **Traducción rápida** `/quick-translate`: arrastrar o elegir varios SRT, ASS/SSA
+  y VTT, progreso/cancelación por archivo, descarga individual o ZIP. Sin relación
+  con biblioteca o jobs; sesiones en memoria y retención de una hora al terminar.
+- **Resumen** `/dashboard`: estado accionable, uso/presupuesto, métricas y gráficos.
+- **Renombrar** `/rename`: preview/diff editable, clasificación/metadatos, sidecars,
+  conflictos, ejecución y deshacer. Acceso secundario desde Herramientas/Más.
+- **Ajustes** `/settings`: Proveedores, Idiomas y calidad, Biblioteca y escaneo,
+  Automatización, Integraciones y Avanzado. La barra de guardado conserva borradores
+  aunque fallen consultas auxiliares; los avisos de secretos permiten repararlos.
+
+`Ctrl+K` / `Cmd+K` abre comandos. En móvil hay cuatro destinos principales y Más;
+los diálogos mantienen el foco y Escape lo devuelve al control que los abrió.
+Las notificaciones son de sesión, no un historial permanente; el replay de eventos
+está acotado. El navegador comparte una conexión de jobs por pestaña y la pausa
+cuando queda oculta. SSE de traducción rápida pertenece a su sesión independiente.
+
+## Desarrollo y build
+
+```sh
+pnpm install --frozen-lockfile
+pnpm run dev
+pnpm run lint
+pnpm run typecheck
+pnpm run build
+pnpm run start
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Node 24 es la versión de la imagen. Fuentes e iconos no necesitan Google Fonts.
+La imagen conserva el entrypoint/config generado de Next pero instala el grafo
+completo de dependencias de producción desde el lockfile, sin copiar el subconjunto
+`node_modules` de los traces. Esto evita omisiones observadas en el standalone;
+hay una comprobación de dependencias durante la construcción de la imagen.
+En desarrollo configurar `API_INTERNAL_URL` hacia el backend correspondiente;
+el navegador siempre usa `/api`. Para imágenes, las rewrites de Next se resuelven
+al construir: por defecto apuntan a `http://api:3001`, la red de Compose. Otra
+topología requiere revisar ese destino durante el build, no solo cambiar una
+variable después de publicar la imagen.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Contratos y cliente API
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+`lib/types.ts` es generado, no editarlo a mano. Desde la raíz:
 
-## Learn More
+```sh
+node scripts/generate-contracts.cjs
+node scripts/generate-contracts.cjs --check
+```
 
-To learn more about Next.js, take a look at the following resources:
+`apiGet`, `apiPost`, `apiPut`, `apiPatch`, `apiDelete` aceptan `RequestInit` y
+`AbortSignal`; uploads usan `FormData`, downloads usan `apiDownload`. Solo GET
+reintenta fallos transitorios. Ninguna mutación se reintenta automáticamente:
+una respuesta perdida no autoriza a encolar otra traducción pagada.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+El hook `useApiQuery` cancela respuestas obsoletas y evita refrescos solapados;
+cambiar la frecuencia no borra datos anteriores. Las pantallas distinguen carga,
+resultado vacío, error y datos anteriores desactualizados. Búsquedas se sincronizan
+con la URL; páginas/filtros y commits de búsqueda mantienen navegación Atrás.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Verificación
 
-## Deploy on Vercel
+No se añadió un framework de tests frontend. Regresiones de lógica pura usan
+Node 24 y su runner nativo:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```sh
+node --test app/settings/settings-validation.test.mjs components/library/library-filters.test.mjs
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Además de lint/typecheck/build, verificar visualmente a 390 y 1440 px: nombres
+largos, búsqueda y Atrás, selección entre páginas, teclado/foco de diálogos,
+notificaciones sobre la navegación, carga fallida y conservación de borradores.
+Las pruebas con fixtures de navegador no prueban al proveedor IA real.
+
+Los permisos de volúmenes, respaldo de la clave de cifrado, presupuesto, límites
+multifichero y actualización compatible se documentan en `../backend/README.md`.

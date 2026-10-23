@@ -1,14 +1,29 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: '10m'
+    max-file: '3'
+
 services:
   redis:
     image: 'redis:7-alpine'
     restart: unless-stopped
+    logging: *default-logging
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   api:
     image: 'ghcr.io/arnedoan/subsarr-backend:latest'
     restart: unless-stopped
+    logging: *default-logging
     expose:
       - '3001'
     environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
       # Puedes poner llaves falsas para probar que levante
       OPENROUTER_API_KEY: sk-test
       DEEPSEEK_API_KEY: sk-test
@@ -18,22 +33,25 @@ services:
       SUBSYNC_SETTINGS_FILE_PATH: /data/subsync.settings.json
       PORT: 3001
     volumes:
-      - '/mnt/d/Downloads/Succession/S03:/media'
+      - '${SUBSYNC_MEDIA_VOLUME:-./test-media}:/media'
       - './test-data:/data'
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
 
   web:
     image: 'ghcr.io/arnedoan/subsarr-frontend:latest'
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - '3040:3040'
     environment:
-      NEXT_PUBLIC_API_URL: 'http://api:3001'
+      NEXT_PUBLIC_API_URL: /api
       API_INTERNAL_URL: 'http://api:3001'
       PORT: 3040
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     healthcheck:
       test:
         [
