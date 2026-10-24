@@ -37,6 +37,10 @@ export class BatchPreviewDto {
   forceBypassRules!: boolean;
 
   @IsOptional()
+  @IsIn(['openrouter', 'deepseek'])
+  provider?: 'openrouter' | 'deepseek';
+
+  @IsOptional()
   @IsIn(['replace', 'alternate'])
   targetConflictResolution?: 'replace' | 'alternate';
 }

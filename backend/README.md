@@ -224,6 +224,12 @@ sustituto de detener extracción/IA/publicación. Interrupciones de servidor no 
 etiquetan como cancelaciones del usuario. Reclamos de salida e IDs evitan trabajos
 concurrentes duplicados; prioridades se actualizan sin borrar/recrear jobs.
 
+`POST /jobs/batch/preview` y `POST /jobs/batch` aceptan el campo opcional
+`provider` (`deepseek` u `openrouter`), incluido en las opciones del formulario
+de lotes. La previsualización comprueba elegibilidad sin invocar al proveedor;
+el encolado conserva la selección para la traducción. Otros valores se rechazan
+con HTTP 400.
+
 `/activity` reemplaza las antiguas pantallas `/jobs` y `/archive`: Cola, Historial
 y Logs. Fechas, texto, conteos y paginación de logs se ejecutan en SQL. El stream
 `/jobs/stream` tiene heartbeats cada 15 s, IDs y replay de hasta 1.000 eventos/10 min;
