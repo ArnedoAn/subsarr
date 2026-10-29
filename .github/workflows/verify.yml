@@ -59,7 +59,8 @@ jobs:
         run: pnpm run typecheck
       - name: Backend unit tests
         working-directory: backend
-        run: pnpm run test -- --runInBand
+        # pnpm forwards a literal `--`, which Jest would read as a test path pattern.
+        run: pnpm run test --runInBand
       - name: Frontend unit tests
         working-directory: frontend
         run: node --test

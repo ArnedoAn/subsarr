@@ -15,7 +15,7 @@ pnpm run lint           # comprobación, no modifica archivos
 pnpm run lint:fix       # correcciones explícitas
 pnpm run format:check
 pnpm run typecheck
-pnpm test -- --runInBand
+pnpm test --runInBand
 REDIS_URL=redis://127.0.0.1:6379/15 pnpm run check:upgrade   # tras build
 ```
 
