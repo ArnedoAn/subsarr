@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { ConflictException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { promises as fs, constants } from 'node:fs';
 import * as path from 'node:path';
@@ -78,7 +78,7 @@ export class OutputService {
       if (existing.isSymbolicLink() || !existing.isFile())
         throw new Error('Subtitle destination is not a regular file');
       if (!options.overwrite)
-        throw new Error('Subtitle destination already exists');
+        throw new ConflictException('Subtitle destination already exists');
       if (!options.itemId)
         throw new Error('Replacing a subtitle requires its history item ID');
     } catch (error) {

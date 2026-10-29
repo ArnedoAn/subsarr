@@ -31,6 +31,7 @@ import {
 } from '../translation/subtitle-format';
 import { canonicalizeLanguage } from '../common/language.utils';
 import { SettingsService } from '../settings/settings.service';
+import type { RuntimeSettings } from '../settings/settings.types';
 import { TokenUsageService } from '../settings/token-usage.service';
 import { ProfilesService } from '../profiles/profiles.service';
 import type { TranslationProfile } from '../profiles/profile.types';
@@ -39,6 +40,8 @@ import { JobCancellationService } from './job-cancellation.service';
 import { JobsEventsService } from './jobs-events.service';
 import { encodeLogCursor } from './job-logs.service';
 import type { JobsQueryDto } from './dto/jobs-query.dto';
+import { resolveProviderModel } from '../common/translation-provider';
+import type { TranslationProvider } from '../contracts/providers';
 
 @Injectable()
 export class JobsService implements OnModuleInit {
@@ -73,15 +76,16 @@ export class JobsService implements OnModuleInit {
     });
   }
 
-  async enqueue(dto: CreateJobDto): Promise<
+  async enqueue(
+    dto: CreateJobDto,
+    snapshot?: { sessionId?: string; settings?: RuntimeSettings },
+  ): Promise<
     | { id: string | number; state: string }
     | {
         batchGroupId: string;
         jobs: Array<{ id: string | number; state: string }>;
       }
   > {
-    await this.assertTokenQuotas();
-
     if (
       !dto.targetLanguages?.length &&
       (!dto.targetLanguage || !dto.targetLanguage.trim())
@@ -95,10 +99,14 @@ export class JobsService implements OnModuleInit {
       dto.targetLanguages && dto.targetLanguages.length > 0
         ? dto.targetLanguages.map((l) => this.normalizeLanguage(l))
         : [this.normalizeLanguage(dto.targetLanguage!)];
+    const settings =
+      snapshot?.settings ?? (await this.settingsService.getSettings());
 
     if (targets.length === 1) {
       return this.enqueueSingleTarget(dto, {
         targetLanguage: targets[0],
+        sessionId: snapshot?.sessionId,
+        settings,
       });
     }
 
@@ -109,6 +117,8 @@ export class JobsService implements OnModuleInit {
         await this.enqueueSingleTarget(dto, {
           targetLanguage,
           batchGroupId,
+          sessionId: snapshot?.sessionId,
+          settings,
         }),
       );
     }
@@ -117,12 +127,18 @@ export class JobsService implements OnModuleInit {
 
   private async enqueueSingleTarget(
     dto: CreateJobDto,
-    ctx: { targetLanguage: string; batchGroupId?: string },
+    ctx: {
+      targetLanguage: string;
+      batchGroupId?: string;
+      sessionId?: string;
+      settings: RuntimeSettings;
+    },
   ): Promise<{ id: string | number; state: string }> {
     let item: MediaItem | null = null;
     let sourceLanguage = '';
     let targetLanguage = ctx.targetLanguage;
-    let provider: 'openrouter' | 'deepseek' | undefined = dto.provider;
+    const settings = ctx.settings;
+    let profile: { provider?: TranslationProvider; model?: string } | undefined;
     let outputExtension: SubtitleOutputExtension = 'srt';
 
     try {
@@ -132,15 +148,15 @@ export class JobsService implements OnModuleInit {
       this.validateMediaPath(dto, item);
 
       if (dto.respectProfiles !== false) {
-        const settings = await this.settingsService.getSettings();
+        // Resolve profile model only after choosing the operation's provider.
         const profiles = await this.profilesService.list();
         const eff = this.resolveProfileForPath(item.path, profiles, {
           sourceLanguage: sourceLanguage || settings.sourceLanguage,
           targetLanguage: targetLanguage || settings.targetLanguage,
-          provider: dto.provider,
+          provider: undefined,
         });
         sourceLanguage = this.normalizeLanguage(eff.sourceLanguage);
-        provider = eff.provider ?? dto.provider;
+        profile = eff;
         if (!dto.targetLanguages?.length) {
           targetLanguage = this.normalizeLanguage(eff.targetLanguage);
         }
@@ -208,8 +224,10 @@ export class JobsService implements OnModuleInit {
       }
     }
 
+    const selection = resolveProviderModel(settings, dto, profile);
+    await this.assertTokenQuotas(selection.provider);
     await this.settingsService.assertTranslationBudget({
-      provider,
+      provider: selection.provider,
       automatic: dto.triggeredBy === 'auto-scan',
       allowBudgetOverride: dto.allowBudgetOverride,
     });
@@ -269,7 +287,11 @@ export class JobsService implements OnModuleInit {
           targetConflictResolution: dto.targetConflictResolution,
           triggeredBy: dto.triggeredBy,
           forceBypassRules: dto.forceBypassRules ?? false,
-          provider,
+          ...selection,
+          sessionId: ctx.sessionId ?? randomUUID(),
+          qualityMode: dto.qualityMode,
+          contextHint: dto.contextHint,
+          useTranslationMemory: dto.useTranslationMemory,
           batchGroupId: ctx.batchGroupId,
           automatic: dto.triggeredBy === 'auto-scan',
           allowBudgetOverride: dto.allowBudgetOverride,
@@ -311,14 +333,9 @@ export class JobsService implements OnModuleInit {
   }
 
   async enqueueBatch(dto: CreateBatchJobsDto) {
-    await this.assertTokenQuotas();
     if (!dto.items.length || dto.items.length > 500)
       throw new BadRequestException('Batch must contain 1 to 500 items');
-    await this.settingsService.assertTranslationBudget({
-      provider: dto.provider,
-      automatic: dto.triggeredBy === 'auto-scan',
-      allowBudgetOverride: dto.allowBudgetOverride,
-    });
+    const settings = await this.settingsService.getSettings();
 
     const results: Array<{
       mediaItemId: string;
@@ -331,19 +348,26 @@ export class JobsService implements OnModuleInit {
 
     for (const [index, item] of dto.items.entries()) {
       try {
-        const job = await this.enqueue({
-          mediaItemId: item.mediaItemId,
-          mediaItemPath: item.mediaItemPath,
-          sourceLanguage: dto.sourceLanguage,
-          targetLanguage: dto.targetLanguage,
-          sourceTrackIndex: item.sourceTrackIndex,
-          triggeredBy: dto.triggeredBy,
-          forceBypassRules: dto.forceBypassRules,
-          provider: dto.provider,
-          targetConflictResolution: dto.targetConflictResolution,
-          priority: dto.priority ?? 8,
-          allowBudgetOverride: dto.allowBudgetOverride,
-        });
+        const job = await this.enqueue(
+          {
+            mediaItemId: item.mediaItemId,
+            mediaItemPath: item.mediaItemPath,
+            sourceLanguage: dto.sourceLanguage,
+            targetLanguage: dto.targetLanguage,
+            sourceTrackIndex: item.sourceTrackIndex,
+            triggeredBy: dto.triggeredBy,
+            forceBypassRules: dto.forceBypassRules,
+            provider: dto.provider,
+            model: dto.model,
+            qualityMode: dto.qualityMode,
+            contextHint: dto.contextHint,
+            useTranslationMemory: dto.useTranslationMemory,
+            targetConflictResolution: dto.targetConflictResolution,
+            priority: dto.priority ?? 8,
+            allowBudgetOverride: dto.allowBudgetOverride,
+          },
+          { settings },
+        );
 
         if ('batchGroupId' in job) {
           throw new Error('Unexpected multi-target batch item');
@@ -381,6 +405,8 @@ export class JobsService implements OnModuleInit {
       throw new BadRequestException('Batch must contain 1 to 500 items');
     const sourceLanguage = this.normalizeLanguage(dto.sourceLanguage);
     const targetLanguage = this.normalizeLanguage(dto.targetLanguage);
+    const settings = await this.settingsService.getSettings();
+    const profiles = await this.profilesService.list();
 
     const results: Array<{
       mediaItemId: string;
@@ -400,6 +426,11 @@ export class JobsService implements OnModuleInit {
     for (const { mediaItemId } of dto.items) {
       try {
         const item = await this.libraryService.getById(mediaItemId);
+        const profile = this.resolveProfileForPath(item.path, profiles, {
+          sourceLanguage,
+          targetLanguage,
+        });
+        resolveProviderModel(settings, dto, profile);
         const alreadyTranslated = [
           ...item.subtitleTracks,
           ...item.externalSubtitles,
@@ -519,20 +550,24 @@ export class JobsService implements OnModuleInit {
       }),
       ...fromArchive,
     ];
+    // History is ordered and filtered by when the job finished (or last ran).
+    const at = (row: (typeof merged)[number]): number =>
+      row.finishedAt ?? row.processedAt ?? row.createdAt;
+    const from = query.from ? Date.parse(query.from) : -Infinity;
+    const to = query.to ? Date.parse(query.to) : Infinity;
     const filtered = merged.filter(
       (row) =>
         (!query.mediaItemId || row.data.mediaItemId === query.mediaItemId) &&
         (!query.state || query.state.split(',').includes(row.state)) &&
+        at(row) >= from &&
+        at(row) <= to &&
         (!query.q ||
           `${row.id} ${row.data.mediaItemPath} ${row.data.targetLanguage}`
             .toLowerCase()
             .includes(query.q.toLowerCase())),
     );
     filtered.sort(
-      (a, b) =>
-        (b.finishedAt ?? b.processedAt ?? b.createdAt) -
-          (a.finishedAt ?? a.processedAt ?? a.createdAt) ||
-        String(a.id).localeCompare(String(b.id)),
+      (a, b) => at(b) - at(a) || String(a.id).localeCompare(String(b.id)),
     );
     const offset = query.offset ?? 0;
     const limit = Math.min(query.limit ?? 50, 200);
@@ -746,7 +781,6 @@ export class JobsService implements OnModuleInit {
     id: string,
     options: { allowBudgetOverride?: boolean } = {},
   ) {
-    await this.assertTokenQuotas();
     const snap = await this.jobArchiveService.getSnapshot(id);
     if (!snap) {
       throw new NotFoundException(`Job not found: ${id}`);
@@ -757,18 +791,26 @@ export class JobsService implements OnModuleInit {
       );
     }
     const d = snap.data;
-    return this.enqueue({
-      mediaItemId: d.mediaItemId,
-      mediaItemPath: d.mediaItemPath,
-      sourceLanguage: d.sourceLanguage,
-      targetLanguage: d.targetLanguage,
-      sourceTrackIndex: d.sourceTrackIndex,
-      triggeredBy: 'manual',
-      forceBypassRules: d.forceBypassRules ?? false,
-      provider: d.provider,
-      targetConflictResolution: d.targetConflictResolution,
-      allowBudgetOverride: options.allowBudgetOverride,
-    });
+    return this.enqueue(
+      {
+        mediaItemId: d.mediaItemId,
+        mediaItemPath: d.mediaItemPath,
+        sourceLanguage: d.sourceLanguage,
+        targetLanguage: d.targetLanguage,
+        sourceTrackIndex: d.sourceTrackIndex,
+        triggeredBy: 'manual',
+        forceBypassRules: d.forceBypassRules ?? false,
+        provider: d.provider,
+        model: d.model,
+        qualityMode: d.qualityMode,
+        contextHint: d.contextHint,
+        useTranslationMemory: d.useTranslationMemory,
+        respectProfiles: false,
+        targetConflictResolution: d.targetConflictResolution,
+        allowBudgetOverride: options.allowBudgetOverride,
+      },
+      { sessionId: d.sessionId },
+    );
   }
 
   async getQueueHealth(): Promise<{
@@ -815,12 +857,14 @@ export class JobsService implements OnModuleInit {
     defaults: {
       sourceLanguage: string;
       targetLanguage: string;
-      provider?: 'openrouter' | 'deepseek';
+      provider?: TranslationProvider;
+      model?: string;
     },
   ): {
     sourceLanguage: string;
     targetLanguage: string;
-    provider?: 'openrouter' | 'deepseek';
+    provider?: TranslationProvider;
+    model?: string;
   } {
     let best: TranslationProfile | null = null;
     for (const p of profiles) {
@@ -837,10 +881,14 @@ export class JobsService implements OnModuleInit {
       sourceLanguage: best.sourceLanguage,
       targetLanguage: best.targetLanguage,
       provider: best.provider ?? defaults.provider,
+      model: best.model,
     };
   }
 
-  private async assertTokenQuotas(): Promise<void> {
+  private async assertTokenQuotas(
+    provider: TranslationProvider,
+  ): Promise<void> {
+    if (provider === 'opencode-go') return;
     const settings = await this.settingsService.getSettings();
     const { free, paid } = await this.tokenUsageService.getTodayTotals();
     if (

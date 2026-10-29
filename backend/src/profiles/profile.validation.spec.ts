@@ -20,6 +20,19 @@ describe('validateProfiles', () => {
     expect(validateProfiles(input)[0]).not.toBe(input[0]);
   });
 
+  it.each([
+    { provider: 'opencode-go', model: 'glm-5.2' },
+    { provider: 'opencode-go' },
+    { provider: 'openrouter', model: 'vendor/model:free' },
+    { provider: 'deepseek', model: 'deepseek-chat' },
+    { model: 'glm-5.2' },
+    { model: 'vendor/model:free' },
+  ])('preserves optional provider/model overrides: %p', (selection) => {
+    const input = [{ ...profile, ...selection }];
+    expect(validateProfiles(input)).toEqual(input);
+    expect(validateProfiles(input)[0]).not.toBe(input[0]);
+  });
+
   it.each(
     [
       null,
@@ -34,6 +47,22 @@ describe('validateProfiles', () => {
       [{ ...profile, targetLanguage: 123 }],
       [{ ...profile, provider: null }],
       [{ ...profile, provider: 'invalid' }],
+      [{ ...profile, model: null }],
+      [{ ...profile, model: 123 }],
+      [{ ...profile, model: '' }],
+      [{ ...profile, model: ' ' }],
+      [{ ...profile, model: 'a'.repeat(129) }],
+      [{ ...profile, model: 'unsafe model' }],
+      [{ ...profile, model: 'model\nheader' }],
+      [{ ...profile, model: '../model' }],
+      [{ ...profile, provider: 'opencode-go', model: 'unsupported-model' }],
+      [
+        {
+          ...profile,
+          provider: 'opencode-go',
+          model: 'anthropic/claude-opus-4-6',
+        },
+      ],
       [{ ...profile, extra: true }],
       [{ ...profile, pathPrefix: '/media\0path' }],
       [profile, profile],
@@ -57,11 +86,14 @@ describe('validateProfiles', () => {
     const config = new ConfigService({ subsync: { dataDir: '/data' } });
     const mkdir = jest.spyOn(fs, 'mkdir').mockResolvedValue(undefined);
     const write = jest.spyOn(fs, 'writeFile').mockResolvedValue(undefined);
+    const profiles = validateProfiles([
+      { ...profile, provider: 'opencode-go', model: 'glm-5.2' },
+    ]);
     try {
-      await new ProfilesService(config).save([profile]);
+      await new ProfilesService(config).save(profiles);
       expect(write).toHaveBeenCalledWith(
         expect.stringContaining('profiles.json'),
-        JSON.stringify({ profiles: [profile] }, null, 2),
+        JSON.stringify({ profiles }, null, 2),
         'utf8',
       );
       expect(mkdir).toHaveBeenCalled();

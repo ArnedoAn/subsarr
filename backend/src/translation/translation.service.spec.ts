@@ -1,15 +1,17 @@
 jest.mock('franc-min', () => ({ franc: jest.fn(() => 'spa') }));
 const mockCreate = jest.fn<
   Promise<unknown>,
-  [unknown, { signal?: AbortSignal }?]
+  [unknown, { signal?: AbortSignal; headers?: Record<string, string> }?]
 >();
 jest.mock('openai', () => ({
   __esModule: true,
   default: jest.fn().mockImplementation(() => ({
     chat: {
       completions: {
-        create: (request: unknown, options?: { signal?: AbortSignal }) =>
-          mockCreate(request, options),
+        create: (
+          request: unknown,
+          options?: { signal?: AbortSignal; headers?: Record<string, string> },
+        ) => mockCreate(request, options),
       },
     },
   })),
@@ -109,8 +111,41 @@ describe('TranslationService shared SDK boundary', () => {
       cacheMissTokens: 18,
     });
     expect(JSON.stringify(mockCreate.mock.calls[1])).toContain(
-      'missing_segments',
+      'Item 1: return exactly 2 line(s)',
     );
+  });
+  it('splits a batch whose cue count stays wrong instead of failing the file', async () => {
+    mockCreate
+      .mockResolvedValueOnce(response({ data: ['Hola y adiós'] }))
+      .mockResolvedValueOnce(response({ data: ['Hola y adiós'] }))
+      .mockResolvedValueOnce(response({ data: ['Hola'] }))
+      .mockResolvedValueOnce(response({ data: ['Adiós'] }));
+    const result = await service.translateLines(
+      ['Hello', 'Goodbye'],
+      'spa',
+      'openrouter-key',
+      'deepseek-key',
+      { provider: 'openrouter', subtitleFormat: 'srt' },
+    );
+    expect(result.lines).toEqual(['Hola', 'Adiós']);
+    expect(mockCreate).toHaveBeenCalledTimes(4);
+  });
+  it('re-wraps cues whose line breaks the provider keeps merging, with a warning', async () => {
+    mockCreate.mockResolvedValue(
+      response({ data: ['Hola a todos, me alegra veros aquí'] }),
+    );
+    const result = await service.translateLines(
+      ['Hello everyone,\nglad to see you here'],
+      'spa',
+      'openrouter-key',
+      'deepseek-key',
+      { provider: 'openrouter', subtitleFormat: 'srt' },
+    );
+    expect(result.lines).toEqual(['Hola a todos, me\nalegra veros aquí']);
+    expect(result.warnings).toContain(
+      '1 cues were re-wrapped to the source line count because the provider kept changing their line breaks.',
+    );
+    expect(mockCreate).toHaveBeenCalledTimes(3);
   });
   it('rejects malformed/nonstring data without silently returning source and accounts both responses', async () => {
     mockCreate.mockResolvedValue(response({ data: [3] }));
@@ -145,6 +180,7 @@ describe('TranslationService shared SDK boundary', () => {
     });
     expect(settingsService.assertTranslationBudget).toHaveBeenCalledWith({
       provider: 'deepseek',
+      model: 'test/deepseek',
       automatic: false,
       allowBudgetOverride: true,
     });
@@ -168,6 +204,7 @@ describe('TranslationService shared SDK boundary', () => {
     expect(mockCreate).toHaveBeenCalledTimes(2);
     expect(settingsService.assertTranslationBudget).toHaveBeenCalledWith({
       provider: 'deepseek',
+      model: 'test/deepseek',
       automatic: true,
       allowBudgetOverride: undefined,
     });
@@ -338,6 +375,7 @@ describe('TranslationService shared SDK boundary', () => {
     );
     expect(settingsService.assertTranslationBudget).toHaveBeenCalledWith({
       provider: 'openrouter',
+      model: 'test/paid',
       automatic: true,
       allowBudgetOverride: undefined,
     });
@@ -461,7 +499,7 @@ describe('TranslationService shared SDK boundary', () => {
     await correcting.promise;
     expect(mockCreate).toHaveBeenCalledTimes(10);
     expect(JSON.stringify(mockCreate.mock.calls[5])).toContain(
-      'missing_segments',
+      'return exactly 2 line(s)',
     );
     expect(JSON.stringify(mockCreate.mock.calls[5])).toContain('contextAfter');
     for (const gate of gates) gate.resolve(response({ data: ['Hola\nAlli'] }));
@@ -558,5 +596,274 @@ describe('TranslationService shared SDK boundary', () => {
     ).rejects.toMatchObject({ name: 'AbortError' });
     expect(mockCreate).toHaveBeenCalledTimes(1);
     expect(settingsService.assertTranslationBudget).not.toHaveBeenCalled();
+  });
+  it('uses saved Go defaults, strict JSON and subscription accounting for every rejected attempt', async () => {
+    settingsService.getSettings.mockResolvedValueOnce({
+      defaultProvider: 'opencode-go',
+      opencodeGoApiKey: ' go-key ',
+      opencodeGoModel: 'glm-5.2',
+      openRouterModel: 'test/openrouter:free',
+      deepSeekModel: 'test/deepseek',
+    });
+    mockCreate
+      .mockResolvedValueOnce(response({ data: [3] }))
+      .mockResolvedValueOnce({
+        ...response({ data: ['Hola'] }),
+        usage: { ...response({}).usage, cost: 42 },
+      });
+    const onUsage = jest.fn();
+    const onTokenUpdate = jest.fn();
+    const result = await service.translateLines(
+      ['Hello'],
+      'spa',
+      'or-key',
+      'ds-key',
+      {
+        onUsage,
+        onTokenUpdate,
+      },
+    );
+    expect(OpenAI).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseURL: 'https://opencode.ai/inference/go/openai/v1',
+        apiKey: 'go-key',
+        maxRetries: 0,
+        defaultHeaders: {
+          'User-Agent': expect.stringMatching(
+            /^Subsarr\//,
+          ) as unknown as string,
+        },
+      }),
+    );
+    expect(mockCreate.mock.calls[0][0]).toMatchObject({
+      model: 'glm-5.2',
+      response_format: { type: 'json_object' },
+    });
+    const firstOptions = mockCreate.mock.calls[0][1] as {
+      headers: Record<string, string>;
+      signal: AbortSignal;
+    };
+    const secondOptions = mockCreate.mock.calls[1][1] as {
+      headers: Record<string, string>;
+    };
+    expect(firstOptions.headers['x-opencode-session']).toMatch(
+      /^[0-9a-f-]{36}$/,
+    );
+    expect(secondOptions.headers).toEqual(firstOptions.headers);
+    expect(firstOptions.signal).toBeInstanceOf(AbortSignal);
+    expect(onUsage).toHaveBeenCalledTimes(2);
+    for (const [attempt] of onUsage.mock.calls)
+      expect(attempt).toMatchObject({
+        provider: 'opencode-go',
+        tier: 'subscription',
+        model: 'glm-5.2',
+        costUsd: 0,
+      });
+    expect(result.tierUsed).toBe('subscription');
+    expect(result.usage.totalTokens).toBe(30);
+    expect(onTokenUpdate).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        estimatedCostUsd: 0,
+        usageByTier: expect.objectContaining({
+          subscription: expect.objectContaining({
+            totalTokens: 30,
+          }) as unknown as { totalTokens: number },
+          paid: expect.objectContaining({ totalTokens: 0 }) as unknown as {
+            totalTokens: number;
+          },
+        }) as unknown as {
+          subscription: { totalTokens: number };
+          paid: { totalTokens: number };
+        },
+      }),
+    );
+    expect(settingsService.assertTranslationBudget).not.toHaveBeenCalled();
+    expect(mockQuotaFetch).not.toHaveBeenCalled();
+  });
+  it.each([401, 403, 429, 400])(
+    'never quota-probes or switches providers on Go error %s',
+    async (status) => {
+      settingsService.getSettings.mockResolvedValueOnce({
+        defaultProvider: 'opencode-go',
+        opencodeGoApiKey: 'go-key',
+        opencodeGoModel: 'glm-5.2',
+        openRouterModel: 'test/openrouter:free',
+        deepSeekModel: 'test/deepseek',
+      });
+      mockCreate.mockRejectedValueOnce({ status, code: 'free_tier_exhausted' });
+      await expect(
+        service.translateLines(['Hello'], 'spa', 'or-key', 'ds-key'),
+      ).rejects.toThrow('No external paid fallback was attempted');
+      expect(mockCreate).toHaveBeenCalledTimes(1);
+      expect(OpenAI).toHaveBeenCalledTimes(1);
+      expect(mockQuotaFetch).not.toHaveBeenCalled();
+      expect(settingsService.assertTranslationBudget).not.toHaveBeenCalled();
+    },
+  );
+  it('uses explicit provider and model rather than another provider saved default', async () => {
+    settingsService.getSettings.mockResolvedValueOnce({
+      defaultProvider: 'opencode-go',
+      opencodeGoApiKey: 'go-key',
+      opencodeGoModel: 'glm-5.2',
+      openRouterModel: 'saved/openrouter:free',
+      deepSeekModel: 'saved/deepseek',
+    });
+    mockCreate.mockResolvedValue(response({ data: ['Hola'] }));
+    await service.translateLines(['Hello'], 'spa', 'or-key', 'ds-key', {
+      provider: 'openrouter',
+      model: 'explicit/openrouter:free',
+    });
+    expect(mockCreate.mock.calls[0][0]).toMatchObject({
+      model: 'explicit/openrouter:free',
+    });
+    expect(OpenAI).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: 'or-key' }),
+    );
+  });
+  it('checks the explicitly selected paid model even when the saved model is free', async () => {
+    mockCreate.mockResolvedValue(response({ data: ['Hola'] }));
+    await service.translateLines(['Hello'], 'spa', 'key', 'paid', {
+      provider: 'openrouter',
+      model: 'selected/paid-model',
+    });
+    expect(settingsService.assertTranslationBudget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: 'openrouter',
+        model: 'selected/paid-model',
+      }),
+    );
+  });
+  it('rejects unsupported Go protocols before any HTTP call', async () => {
+    await expect(
+      service.translateLines(['Hello'], 'spa', 'or-key', 'ds-key', {
+        provider: 'opencode-go',
+        model: 'claude-sonnet-4-6',
+      }),
+    ).rejects.toThrow('not a documented OpenAI-compatible chat model');
+    expect(mockCreate).not.toHaveBeenCalled();
+    expect(OpenAI).not.toHaveBeenCalled();
+  });
+  it('skips resumed cues, validates them and awaits checkpoints after durable accounting', async () => {
+    mockCreate.mockResolvedValue(response({ data: ['Adios'] }));
+    const stored: string[] = [];
+    const result = await service.translateLines(
+      ['Hello', 'Goodbye'],
+      'spa',
+      'key',
+      'paid',
+      {
+        initialTranslations: { 0: 'Hola' },
+        onUsage: () => {
+          stored.push('usage');
+        },
+        onChunkTranslated: async ({ indices, lines }) => {
+          expect(indices).toEqual([1]);
+          expect(lines).toEqual(['Adios']);
+          expect(stored).toEqual(['usage']);
+          await Promise.resolve();
+          stored.push('checkpoint');
+        },
+      },
+    );
+    expect(result.lines).toEqual(['Hola', 'Adios']);
+    expect(stored).toEqual(['usage', 'checkpoint']);
+    const body = mockCreate.mock.calls[0][0] as {
+      messages: { content: string }[];
+    };
+    expect(JSON.parse(body.messages[1].content)).toMatchObject({
+      items: ['Goodbye'],
+    });
+  });
+  it.each<Record<number, string>>([{ 0: 'Hola' }, { 1: '<i>Hola</i>' }])(
+    'rejects invalid checkpoint structure or indices before provider requests: %s',
+    async (initialTranslations) => {
+      await expect(
+        service.translateLines(['<i>Hello</i>'], 'spa', 'key', 'paid', {
+          initialTranslations,
+        }),
+      ).rejects.toThrow();
+      expect(mockCreate).not.toHaveBeenCalled();
+    },
+  );
+  it('generates story context using an actual context task, not translation or subtitle verification', async () => {
+    mockCreate.mockResolvedValue(response({ data: ['Two friends reunite.'] }));
+    const onChunkTranslated = jest.fn();
+    const result = await service.translateLines(
+      ['Hello\nGoodbye'],
+      'spa',
+      'key',
+      'paid',
+      {
+        task: 'context',
+        onChunkTranslated,
+      },
+    );
+    const body = mockCreate.mock.calls[0][0] as {
+      messages: { content: string }[];
+    };
+    expect(body.messages[0].content).toContain(
+      'Create one concise story context sheet',
+    );
+    expect(body.messages[0].content).not.toContain(
+      'You translate subtitle dialogue',
+    );
+    expect(result.lines).toEqual(['Two friends reunite.']);
+    expect(result.verification).toBeUndefined();
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    expect(onChunkTranslated).not.toHaveBeenCalled();
+  });
+  it('uses review instructions and bounded candidate context with normal accounting', async () => {
+    mockCreate.mockResolvedValue(response({ data: ['Hola'] }));
+    const onUsage = jest.fn();
+    await service.translateLines(['Hello'], 'spa', 'key', 'paid', {
+      task: 'review',
+      contextHint: 'Candidate data: Hola',
+      onUsage,
+    });
+    const body = mockCreate.mock.calls[0][0] as {
+      messages: { content: string }[];
+    };
+    expect(body.messages[0].content).toContain(
+      'You review subtitle translations',
+    );
+    expect(body.messages[0].content).toContain(
+      'Read-only context data:\nCandidate data: Hola',
+    );
+    expect(onUsage).toHaveBeenCalledTimes(1);
+  });
+  it('rejects oversized context and task-mismatched resumed cues before requests', async () => {
+    await expect(
+      service.translateLines(['Hello'], 'spa', 'key', 'paid', {
+        contextHint: 'x'.repeat(12001),
+      }),
+    ).rejects.toThrow('12000');
+    await expect(
+      service.translateLines(['Hello'], 'spa', 'key', 'paid', {
+        task: 'review',
+        initialTranslations: { 0: 'Hola' },
+      }),
+    ).rejects.toThrow('only apply to the translate task');
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+  it('keeps one caller session across all Go chunks', async () => {
+    settingsService.getSettings.mockResolvedValueOnce({
+      defaultProvider: 'opencode-go',
+      opencodeGoApiKey: 'go-key',
+      opencodeGoModel: 'glm-5.2',
+      openRouterModel: 'test/openrouter:free',
+      deepSeekModel: 'test/deepseek',
+    });
+    mockCreate.mockResolvedValue(response({ data: ['Hola'] }));
+    const sessionId = '594ffef6-d163-4a35-9610-1e571a18d448';
+    await service.translateLines(
+      ['x'.repeat(8000), 'y'.repeat(8000)],
+      'spa',
+      'key',
+      'paid',
+      { sessionId },
+    );
+    expect(mockCreate).toHaveBeenCalledTimes(2);
+    for (const [, options] of mockCreate.mock.calls)
+      expect(options?.headers).toEqual({ 'x-opencode-session': sessionId });
   });
 });

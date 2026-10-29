@@ -29,6 +29,14 @@ import {
 import { validateSettings } from './settings.validation';
 import { TokenUsageService } from './token-usage.service';
 import { isFreeOpenRouterModel } from './provider-pricing';
+import type { TranslationProvider } from '../contracts/providers';
+import { OPENCODE_GO_CHAT_MODELS } from '../common/translation-provider';
+
+export interface GoModelCatalog {
+  models: Array<{ id: string; name: string }>;
+  source: 'documented' | 'remote';
+  warning?: string;
+}
 
 const DEFAULT_RULES: RuleToggleConfig[] = [
   { id: 'already-has-target-subtitle', enabled: true },
@@ -46,6 +54,12 @@ export class SettingsService {
   private loadingSettings?: Promise<RuntimeSettings>;
   private secretStore?: SecretStore;
   private readonly unreadableSecrets = new Map<SecretField, string>();
+  private goModelCatalog?: {
+    key: string;
+    expires: number;
+    value: GoModelCatalog;
+  };
+  private goModelRequest?: { key: string; value: Promise<GoModelCatalog> };
 
   constructor(
     private readonly configService: ConfigService,
@@ -148,14 +162,18 @@ export class SettingsService {
   }
 
   async assertTranslationBudget(options: {
-    provider?: 'deepseek' | 'openrouter';
+    provider?: TranslationProvider;
+    model?: string;
     automatic: boolean;
     allowBudgetOverride?: boolean;
   }): Promise<void> {
     const settings = await this.getSettings();
+    const provider =
+      options.provider ?? settings.defaultProvider ?? 'openrouter';
+    if (provider === 'opencode-go') return;
     if (
-      (options.provider ?? 'openrouter') === 'openrouter' &&
-      isFreeOpenRouterModel(settings.openRouterModel)
+      provider === 'openrouter' &&
+      isFreeOpenRouterModel(options.model ?? settings.openRouterModel)
     )
       return;
     const budget = await this.getBudgetStatus();
@@ -246,6 +264,109 @@ export class SettingsService {
     return { openRouter, deepSeek };
   }
 
+  async fetchOpenCodeGoModels(): Promise<GoModelCatalog> {
+    const key = (await this.getSettings()).opencodeGoApiKey ?? '';
+    if (
+      this.goModelCatalog?.key === key &&
+      this.goModelCatalog.expires > Date.now()
+    )
+      return this.goModelCatalog.value;
+    if (this.goModelRequest?.key === key) return this.goModelRequest.value;
+    const value = this.loadGoModelCatalog(key)
+      .catch(
+        (): GoModelCatalog => ({
+          models: OPENCODE_GO_CHAT_MODELS.map((model) => ({ ...model })),
+          source: 'documented',
+          warning:
+            'Could not load the live OpenCode Go catalog. Showing documented OpenAI-compatible chat models only; availability and subscription quota are not verified.',
+        }),
+      )
+      .then((catalog) => {
+        this.goModelCatalog = {
+          key,
+          expires: Date.now() + 300_000,
+          value: catalog,
+        };
+        return catalog;
+      })
+      .finally(() => {
+        if (this.goModelRequest?.value === value)
+          this.goModelRequest = undefined;
+      });
+    this.goModelRequest = { key, value };
+    return value;
+  }
+
+  private async loadGoModelCatalog(key: string): Promise<GoModelCatalog> {
+    if (!key.trim())
+      throw new BadRequestException('OpenCode Go API key required');
+    const response = await fetch('https://opencode.ai/inference/go/v1/models', {
+      headers: {
+        Authorization: `Bearer ${key}`,
+        'User-Agent': `Subsarr/${process.env.npm_package_version ?? '0.0.1'}`,
+      },
+      signal: AbortSignal.timeout(5_000),
+      redirect: 'error',
+    });
+    if (!response.ok)
+      throw new BadRequestException(
+        `OpenCode Go credential validation failed (HTTP ${response.status})`,
+      );
+    // Bound streamed bytes before decoding or parsing an untrusted catalog.
+    const maxBytes = 256 * 1024;
+    const reader = response.body?.getReader();
+    if (!reader)
+      throw new BadRequestException(
+        'OpenCode Go returned an empty model catalog',
+      );
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > maxBytes) {
+          await reader.cancel();
+          throw new BadRequestException(
+            'OpenCode Go model catalog exceeds 256 KiB',
+          );
+        }
+        chunks.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    const body: unknown = JSON.parse(
+      Buffer.concat(chunks, size).toString('utf8'),
+    );
+    if (
+      !body ||
+      typeof body !== 'object' ||
+      !('data' in body) ||
+      !Array.isArray(body.data) ||
+      body.data.length > 2000
+    )
+      throw new BadRequestException(
+        'OpenCode Go returned an invalid model catalog',
+      );
+    const available = new Set(
+      body.data.map((entry: unknown) =>
+        entry && typeof entry === 'object' && 'id' in entry
+          ? entry.id
+          : undefined,
+      ),
+    );
+    const models = OPENCODE_GO_CHAT_MODELS.filter(({ id }) =>
+      available.has(id),
+    );
+    if (!models.length)
+      throw new BadRequestException(
+        'OpenCode Go catalog contains no supported chat models',
+      );
+    return { models: models.map((model) => ({ ...model })), source: 'remote' };
+  }
+
   async getPublicSettings(): Promise<PublicSettings> {
     const settings = await this.getSettings();
     return {
@@ -269,6 +390,12 @@ export class SettingsService {
       ),
       openRouterModel: settings.openRouterModel,
       deepSeekModel: settings.deepSeekModel,
+      opencodeGoApiKeyMasked: this.maskKey(
+        settings.opencodeGoApiKey ?? '',
+        'opencodeGoApiKey',
+      ),
+      opencodeGoModel: settings.opencodeGoModel ?? 'glm-5.2',
+      defaultProvider: settings.defaultProvider ?? 'openrouter',
       scanCacheTtlMinutes: settings.scanCacheTtlMinutes,
       concurrency: settings.concurrency,
       pathContainsExclusions: settings.pathContainsExclusions,
@@ -375,6 +502,24 @@ export class SettingsService {
       merged.deepSeekApiKey !== current.deepSeekApiKey
     )
       await this.assertDeepSeekKeyValid(merged.deepSeekApiKey);
+    if (
+      merged.opencodeGoApiKey &&
+      merged.opencodeGoApiKey !== current.opencodeGoApiKey
+    ) {
+      try {
+        const value = await this.loadGoModelCatalog(merged.opencodeGoApiKey);
+        this.goModelCatalog = {
+          key: merged.opencodeGoApiKey,
+          expires: Date.now() + 300_000,
+          value,
+        };
+      } catch (error) {
+        if (error instanceof BadRequestException) throw error;
+        throw new BadRequestException(
+          'Could not reach OpenCode Go to validate the API key within 5 seconds',
+        );
+      }
+    }
     await this.persist(merged, replacedSecrets);
     for (const field of replacedSecrets) this.unreadableSecrets.delete(field);
     this.cachedSettings = merged;
@@ -404,6 +549,9 @@ export class SettingsService {
       deepSeekApiKey: config.deepSeekApiKey,
       openRouterModel: 'openrouter/free',
       deepSeekModel: 'deepseek-chat',
+      opencodeGoApiKey: config.opencodeGoApiKey ?? '',
+      opencodeGoModel: config.opencodeGoModel ?? 'glm-5.2',
+      defaultProvider: config.defaultProvider ?? 'openrouter',
       scanCacheTtlMinutes: config.scanCacheTtlMinutes,
       concurrency: config.concurrency,
       pathContainsExclusions: config.pathExclusions,

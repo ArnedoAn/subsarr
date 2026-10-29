@@ -6,6 +6,7 @@ import {
 } from '../common/path-safety';
 import type { RuntimeSettings } from './settings.types';
 import { SECRET_FIELDS, isMaskedSecret } from './secret-store';
+import { validateProviderModel } from '../common/translation-provider';
 
 import { canonicalizeLanguage } from '../common/language.utils';
 export async function validateSettings(
@@ -139,14 +140,15 @@ export async function validateSettings(
     'deepSeekOutputUsdPerMillion',
   ] as const)
     if (settings[name] !== undefined) number(settings[name], name, 0, 1000);
-  for (const name of ['openRouterModel', 'deepSeekModel'] as const)
-    if (
-      typeof settings[name] !== 'string' ||
-      !settings[name].trim() ||
-      settings[name].length > 200 ||
-      /[\r\n\0]/.test(settings[name])
+  validateProviderModel('openrouter', settings.openRouterModel);
+  validateProviderModel('deepseek', settings.deepSeekModel);
+  validateProviderModel('opencode-go', settings.opencodeGoModel ?? 'glm-5.2');
+  if (
+    !['openrouter', 'deepseek', 'opencode-go'].includes(
+      settings.defaultProvider ?? 'openrouter',
     )
-      fail(`Invalid ${name}`);
+  )
+    fail('Invalid defaultProvider');
   for (const name of SECRET_FIELDS)
     if (
       settings[name] !== undefined &&

@@ -16,7 +16,20 @@ pnpm run lint:fix       # correcciones explícitas
 pnpm run format:check
 pnpm run typecheck
 pnpm test -- --runInBand
+REDIS_URL=redis://127.0.0.1:6379/15 pnpm run check:upgrade   # tras build
 ```
+
+`check:upgrade` (`../scripts/check-upgrade.cjs`) siembra una base en el esquema
+más antiguo con secretos en claro, filas de tokens y un job archivado; arranca
+`dist/main.js` dos veces con datos temporales, comprueba que todas las migraciones
+se aplican, que los datos sobreviven cifrados/intactos, que el segundo arranque no
+cambia nada y que SIGTERM cierra limpio. Usar una base Redis desechable: el script
+rechaza colas `bull:translation:*` existentes y limpia las suyas.
+
+CI (`.github/workflows/verify.yml`): Node 24, `pnpm install --frozen-lockfile` en
+ambos paquetes, lint, typecheck, tests, build, contratos y `check:upgrade` con un
+servicio Redis. El workflow de imágenes depende de esa verificación, mantiene
+ejecución manual y no llama a ningún webhook de despliegue.
 
 Redis es necesario para el backend completo. Usar un Node compatible con los
 módulos nativos instalados; no reconstruir `better-sqlite3` para otro Node si se
@@ -166,23 +179,39 @@ tratarlos como metadatos potencialmente sensibles. Compose rota los logs.
 Comparar el primer escaneo y otro sin cambios, conservando resúmenes y warnings
 con el mismo `scanId`. No extrapolar una prueba pequeña a toda la biblioteca.
 
+### Descargas en curso, watcher e historial
+
+- Se ignoran `*.part`, `*.partial`, `*.crdownload` y `*.tmp`. Un video con mtime
+  de menos de 30 s, o cuyo tamaño/mtime cambia entre observaciones, queda
+  `probeStatus: 'pending'`: no se analiza ni se encola automáticamente hasta estar
+  estable. Archivos antiguos se analizan de inmediato.
+- `SUBSYNC_WATCH_ENABLED=true` (por defecto `false`) activa `fs.watch` por
+  directorio visitado, máximo 2.048, agrupando eventos 2 s y reconciliando solo
+  los directorios afectados, sin solaparse con un escaneo en curso. El escaneo
+  periódico completo sigue siendo la recuperación ante eventos perdidos.
+- Se guardan los últimos 100 escaneos (métricas, fases, hasta 50 fallos y 20
+  archivos lentos por escaneo): `GET /library/scans`, `/library/scans/:id`,
+  `/library/scans/:id/export` (solo nombres de archivo salvo `?redact=false`) y
+  `GET /library/watch-status`.
+
 ## Traducción y presupuesto
 
 SRT, ASS/SSA y WebVTT comparten parser/documento y motor. Se preservan tiempos,
 identificadores, estructura y markup protegido; entradas o respuestas inválidas
 no se presentan como una traducción correcta copiando silenciosamente el original.
-Los saltos internos de cada cue también se conservan: si cambian, se solicita
-corrección y se rechaza la salida si persiste el cambio. No se aplica reflow
-automático; una división visual distinta puede ser SRT válido, pero no cumple
-esta política de preservación. Las entradas multilínea siguen admitidas.
+Los saltos internos de cada cue también se conservan en la salida de IA: si
+cambian, se solicita corrección y se rechaza la salida si persiste el cambio. No se
+aplica reflow automático. Las ediciones manuales en `/review` y las traducciones
+humanas subidas sí pueden redistribuir líneas; el markup protegido se exige siempre.
 
 BOM/UTF-8/UTF-16 y codificaciones legacy detectadas con suficiente confianza se
 manejan explícitamente; ambigüedades dan errores accionables.
 
-DeepSeek y OpenRouter comparten SDK compatible con OpenAI y limitadores por
-proveedor en el proceso (5 DeepSeek, 3 OpenRouter), incluidos correcciones y
-fallbacks. El glosario guardado se aplica a ambos flujos. Verificación estructural
-siempre activa; verificación semántica configurable. SDK sin reintentos ocultos.
+DeepSeek, OpenRouter y OpenCode Go comparten SDK compatible con OpenAI y
+limitadores por proveedor en el proceso (5 DeepSeek, 3 OpenRouter, 2 Go), incluidos
+correcciones y fallbacks. El glosario guardado se aplica a todos los flujos.
+Verificación estructural siempre activa; verificación semántica configurable. SDK
+sin reintentos ocultos.
 
 La contabilidad registra cada respuesta, aunque su contenido sea rechazado,
 separando cache-hit/miss y proveedor/modelo. Precios DeepSeek configurables con
@@ -200,6 +229,63 @@ modelo pago se identifica la estimación con tarifas DeepSeek, no se declara gra
   genérica puede verificarse con `/api/v1/key` según la
   [documentación de OpenRouter](https://openrouter.ai/docs/api_reference/limits).
 
+### Proveedor y modelo predeterminados
+
+Ajustes guarda un proveedor predeterminado (`SUBSYNC_DEFAULT_PROVIDER`, por defecto
+`openrouter`) y un modelo por proveedor. Prioridad: selección explícita de la
+operación > perfil > predeterminado. Un modelo siempre pertenece al proveedor
+elegido. Jobs, lotes y traducción rápida congelan proveedor/modelo al crearse;
+cambiar el predeterminado solo afecta trabajos futuros y los reintentos conservan
+el snapshot.
+
+### OpenCode Go (suscripción)
+
+- `OPENCODE_GO_API_KEY` (o Ajustes, cifrada) y `OPENCODE_GO_MODEL` (por defecto
+  `glm-5.2`). Endpoint `https://opencode.ai/inference/go/openai/v1/chat/completions`.
+- Solo modelos documentados compatibles con chat OpenAI. `GET
+  /settings/opencode-go/models` consulta el catálogo remoto (timeout 5 s, respuesta
+  limitada a 256 KiB, caché 5 min) y, si falla, devuelve la lista documentada con
+  un aviso explícito.
+- Peticiones honestas: `User-Agent: Subsarr/<versión>` y `x-opencode-session`
+  estable por documento. Go está pensado para agentes de programación; la
+  aceptación del uso para subtítulos no está verificada.
+- El consumo se registra como `subscription`, con `costUsd = 0` como "sin cargo
+  adicional asumido", no como gratis ni con tarifas inventadas. No consume el
+  presupuesto mensual pago. Desactivar Extra Usage en la consola de OpenCode para
+  evitar cargos externos; la app no lo activa.
+- Sin fallback automático de Go a proveedores pagos; 401/403/429 fallan con un
+  error claro.
+
+### Modos de calidad, checkpoints y memoria
+
+- `qualityMode`: `fast` (actual), `balanced` (genera una hoja de contexto breve a
+  partir de inicio/medio/final ≤ 8 KB y la reutiliza) y `review` (balanced + revisión
+  IA solo de cues sospechosos, máximo 100 en tandas de 60). Ambos añaden consumo
+  contabilizado. `contextHint` opcional del usuario.
+- Checkpoints de jobs de biblioteca: identidad SHA-256 de bytes, idiomas,
+  proveedor, modelo, glosario, modo, verificación, memoria, contexto y revisión del
+  prompt. Se guardan solo chunks validados; reanudar no repite consumo. Retención
+  30 días y máximo 100. `GET/DELETE /translation-checkpoints`. La traducción rápida
+  es siempre efímera: nunca escribe texto ni checkpoints.
+- Memoria de traducción: solo entradas aprobadas manualmente, coincidencia exacta de
+  texto, contexto vecino, idiomas y glosario/estilo; máximo 10.000.
+  `GET/POST/DELETE /translation-memory`. Entradas cuya división de líneas ya no
+  encaja con la política del motor no se reutilizan.
+- Informe de legibilidad determinista por cue (20 caracteres/s, 42 por línea,
+  2 líneas, duración ≥ 500 ms): son avisos, nunca cambian tiempos.
+
+### Revisión de subtítulos (`/subtitle-workspace`)
+
+Sesiones en memoria (máximo 20, 20 MiB, una hora sin actividad) creadas subiendo
+fuente y traducción opcional, desde un sidecar de la biblioteca
+(`POST /subtitle-workspace/library/:mediaId`, solo rutas listadas del item o del
+historial) o desde un resultado de traducción rápida
+(`POST /quick-translate/:id/files/:fileId/workspace`). Edición con
+`expectedRevision` (409 si cambió), retraducción asíncrona de cues seleccionados
+con operación cancelable, edición del contexto, aprobación explícita a memoria,
+descarga y guardado explícito en la biblioteca (409 si el destino existe y no se
+permitió sobrescribir).
+
 ## Traducción rápida de archivos
 
 `/quick-translate` acepta arrastrar o elegir varios SRT/ASS/SSA/VTT. No crea items
@@ -215,6 +301,29 @@ se resuelven en el servidor, y el consumo sí cuenta en el presupuesto.
 - Descarga individual `nombre.<idioma>.<ext>` o ZIP con nombres únicos.
 - Retención de una hora desde el estado terminal; no expira mientras está en cola
   o traduciendo. Reiniciar el backend pierde estas sesiones efímeras.
+- El resultado de cada archivo informa proveedor, modelo, tier, tokens y resumen de
+  legibilidad. Abrir en revisión copia fuente/resultado a una sesión de
+  `/subtitle-workspace`; ambos permanecen en memoria hasta que expira el lote.
+
+## Evaluación de traducciones
+
+Corpus original versionado en `benchmarks/subtitles/v1` (humor, modismos, diálogo
+rápido, canciones, anime y terminología en SRT/ASS/VTT), con referencias humanas.
+Puede reemplazarse con `SUBSYNC_EVALUATION_CORPUS_DIR`.
+
+```sh
+# Offline, sin IA: valida ids, tiempos, markup, legibilidad, terminología y distancia léxica
+node ../scripts/evaluate-translations.cjs --candidate-dir benchmarks/subtitles/v1
+# En vivo: consume cuota del proveedor elegido mediante la API en ejecución
+node ../scripts/evaluate-translations.cjs --live --endpoint http://127.0.0.1:3001 \
+  --provider opencode-go --model glm-5.2 --input humor --quality-mode balanced
+```
+
+API: `POST /evaluations/run`, `GET /evaluations/:id`, `/:id/report`,
+`POST /:id/cancel`; respeta presupuesto y contabilidad. Las métricas automáticas son
+aproximaciones estructurales/léxicas, no una medida de calidad lingüística; la
+rúbrica humana (fidelidad, naturalidad, voz, humor, consistencia) queda vacía hasta
+revisarla. Informes en memoria: máximo 100, una hora.
 
 ## Jobs, actividad y retención
 
@@ -267,3 +376,9 @@ Redis y API quedan en la red interna. `/health` refleja disponibilidad de Redis.
 Para despliegues con otra topología, revisar el destino `API_INTERNAL_URL` al
 construir/configurar Next: las rewrites se resuelven durante el build. Las imágenes
 incluyen exclusiones de `.env`, datos, medios y dependencias del host.
+
+`GET /system/preflight` informa datos/permisos, acceso a SQLite y migraciones
+pendientes (sin ejecutarlas), Redis, clave de cifrado, qué proveedores tienen key
+(sin valores), proveedor/modelo predeterminado y cada raíz permitida/seleccionada
+con disponibilidad y permisos. Una raíz no montada se marca y no impide usar las
+demás.

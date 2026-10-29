@@ -14,13 +14,13 @@ export interface DashboardStats {
   jobsByState: Record<string, number>;
   jobsSummary: { today: { completed: number; failed: number; cancelled: number; total: number }; week: { completed: number; failed: number; cancelled: number; total: number }; archiveTotal: number };
   jobsByDay: Array<{ date: string; completed: number; failed: number; cancelled: number }>;
-  tokensByDay: Array<{ date: string; free: number; paid: number }>;
-  tokenUsage: { free: TierBlock; paid: TierBlock; estimatedCostUsd: number };
+  tokensByDay: Array<{ date: string; free: number; paid: number; subscription?: number }>;
+  tokenUsage: { free: TierBlock; paid: TierBlock; subscription?: TierBlock; estimatedCostUsd: number };
   queue: { ok: boolean; jobCounts?: Record<string, number>; error?: string };
   memory: { heapUsed: number; heapTotal: number; rss: number };
   uptimeSeconds: number;
 }
-const SERIES = { completed: 'var(--success)', failed: 'var(--error)', cancelled: 'var(--warning)', free: 'var(--primary)', paid: 'var(--secondary)' };
+const SERIES = { completed: 'var(--success)', failed: 'var(--error)', cancelled: 'var(--warning)', free: 'var(--primary)', paid: 'var(--secondary)', subscription: 'var(--tertiary)' };
 const tooltipStyle = { background: 'var(--surface-container-high)', border: '1px solid var(--outline-variant)', borderRadius: 8, color: 'var(--on-surface)' };
 
 export default function DashboardPage() {
@@ -45,8 +45,9 @@ export default function DashboardPage() {
       {data.libraryScan.lastError && <div role="alert" className="rounded-xl border border-warning/30 p-4"><p className="text-warning">Last scan failed: {data.libraryScan.lastError}</p><p className="text-sm text-on-surface-variant">Last successful scan: {data.libraryScan.lastSuccessAt ? new Date(data.libraryScan.lastSuccessAt).toLocaleString() : 'none yet'}. Existing inventory is retained.</p><Link href="/?status=failed" className="btn btn-ghost mt-2">Review library issues</Link></div>}
       <div className="grid gap-6 lg:grid-cols-2">
         <Chart title="Translation outcomes · last 30 days" data={data.jobsByDay} keys={['completed', 'failed', 'cancelled']} />
-        <Chart title="Token usage · last 30 days" data={data.tokensByDay} keys={['free', 'paid']} />
+        <Chart title="Token usage · last 30 days" data={data.tokensByDay} keys={['free', 'paid', 'subscription']} />
       </div>
+      <p className="text-sm text-on-surface-variant">Subscription usage: {(data.tokenUsage.subscription?.totalTokens ?? 0).toLocaleString()} tokens. Go subscription fees and Console Extra Usage charges are not estimated or included in the pay-as-you-go budget.</p>
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="rounded-xl border border-outline-variant/25 bg-surface-container p-5"><h2 className="font-semibold">Queue availability</h2><p className={stats.error || !data.queue.ok ? 'text-error' : 'text-on-surface'}>{stats.error ? 'Unknown · showing stale data' : data.queue.ok ? 'Queue reachable' : `Unavailable: ${data.queue.error ?? 'connection failed'}`}</p>{data.queue.ok && <dl className="mt-3 grid grid-cols-2 gap-2 text-sm">{Object.entries(queue ?? {}).map(([state, count]) => <div key={state}><dt className="text-on-surface-variant">{state}</dt><dd><Link className="underline" href={`/activity?tab=${['completed','failed','cancelled'].includes(state) ? 'history' : 'queue'}&state=${encodeURIComponent(state)}`}>{count}</Link></dd></div>)}</dl>}<Link className="btn btn-secondary mt-4" href="/activity?tab=logs&level=error">Inspect error logs</Link></div>
         <div className="rounded-xl border border-outline-variant/25 bg-surface-container p-5"><h2 className="font-semibold">Process</h2><dl className="mt-3 space-y-2 text-sm"><div className="flex justify-between"><dt>Uptime</dt><dd>{Math.floor(data.uptimeSeconds / 3600)}h {Math.floor(data.uptimeSeconds % 3600 / 60)}m</dd></div><div className="flex justify-between"><dt>Heap used / allocated</dt><dd>{(data.memory.heapUsed / 1048576).toFixed(1)} / {(data.memory.heapTotal / 1048576).toFixed(1)} MiB</dd></div><div className="flex justify-between"><dt>Resident memory</dt><dd>{(data.memory.rss / 1048576).toFixed(1)} MiB</dd></div></dl><Link className="btn btn-ghost mt-4" href="/?missingTarget=true">Find media missing target subtitles</Link></div>

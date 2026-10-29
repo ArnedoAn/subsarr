@@ -25,6 +25,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile --prod
 
 COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/benchmarks ./benchmarks
 
 # Entrypoint migrates app-data ownership when PUID/PGID are supplied, then drops root.
 COPY docker-entrypoint.sh /usr/local/bin/

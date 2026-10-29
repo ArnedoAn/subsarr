@@ -20,6 +20,7 @@ import { ProbeCacheEntity } from '../database/entities/probe-cache.entity';
 import { SettingsService } from '../settings/settings.service';
 import type { RuntimeSettings } from '../settings/settings.types';
 import { LibraryService } from './library.service';
+import type { MediaItem } from './media-item.entity';
 
 interface ProbeBoundary {
   execFfprobe(filePath: string): Promise<string>;
@@ -97,6 +98,9 @@ describe('LibraryService scan behavior', () => {
       deepSeekApiKey: '',
       openRouterModel: '',
       deepSeekModel: '',
+      opencodeGoApiKey: '',
+      opencodeGoModel: 'glm-5.2',
+      defaultProvider: 'openrouter',
       scanCacheTtlMinutes: 60,
       concurrency: 1,
       pathContainsExclusions: [],
@@ -141,6 +145,7 @@ describe('LibraryService scan behavior', () => {
   ): Promise<string> {
     const filePath = path.join(mediaDir, name);
     await writeFile(filePath, content);
+    await utimes(filePath, new Date(now - 60_000), new Date(now - 60_000));
     return filePath;
   }
 
@@ -159,6 +164,69 @@ describe('LibraryService scan behavior', () => {
       ...overrides,
     });
   }
+
+  it('defers recent downloads without probing, then admits stable media', async () => {
+    const filePath = await media();
+    await utimes(filePath, new Date(now), new Date(now));
+    expect((await service.getLibrary(true))[0].probeStatus).toBe('pending');
+    expect(probe).not.toHaveBeenCalled();
+    expect(service.getScanStatus().metrics?.pendingFiles).toBe(1);
+    now += 30_000;
+    expect((await service.getLibrary(true))[0].probeStatus).toBe('ok');
+    expect(probe).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores temporary downloads including temporary tokens before the media suffix', async () => {
+    await media('ready.mkv');
+    for (const name of [
+      'a.mkv.part',
+      'b.partial',
+      'c.mp4.crdownload',
+      'd.mkv.tmp',
+      'e.part.mkv',
+    ]) {
+      await media(name);
+    }
+    expect((await service.getLibrary(true)).map((item) => item.name)).toEqual([
+      'ready',
+    ]);
+    expect(probe).toHaveBeenCalledTimes(1);
+  });
+
+  it('reconciles only dirty directories and removes deleted subtrees', async () => {
+    const nested = path.join(mediaDir, 'nested');
+    await mkdir(nested);
+    const nestedFile = await media(path.join('nested', 'old.mkv'));
+    await media('root.mkv');
+    await service.getLibrary(true);
+    await media('new.mkv');
+    const directoryReads = jest.spyOn(fs, 'readdir');
+    const targeted = service as unknown as {
+      startScan(
+        settings: RuntimeSettings,
+        ttl: number,
+        trigger: 'cache-refresh',
+        dirs: string[],
+      ): Promise<MediaItem[]>;
+    };
+    let items = await targeted.startScan(settings, 60_000, 'cache-refresh', [
+      mediaDir,
+    ]);
+    expect(items.map((item) => item.name).sort()).toEqual([
+      'new',
+      'old',
+      'root',
+    ]);
+    expect(
+      directoryReads.mock.calls.some(([directory]) => directory === nested),
+    ).toBe(false);
+    await rm(nested, { recursive: true });
+    items = await targeted.startScan(settings, 60_000, 'cache-refresh', [
+      mediaDir,
+      nested,
+    ]);
+    expect(items.some((item) => item.path === nestedFile)).toBe(false);
+  });
 
   it('keeps failed-probe media and sidecars, and persists a bounded negative cache', async () => {
     const filePath = await media();
@@ -257,6 +325,10 @@ describe('LibraryService scan behavior', () => {
         );
       }
 
+      await service.getLibrary(true);
+      expect((await service.getLibrary(true))[0].probeStatus).toBe('pending');
+      expect(probe).toHaveBeenCalledTimes(1);
+      now += 30_000;
       await service.getLibrary(true);
 
       expect(probe).toHaveBeenCalledTimes(2);

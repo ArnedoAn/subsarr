@@ -6,11 +6,14 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  Matches,
+  MaxLength,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ProfilesService } from './profiles.service';
 import type { TranslationProfile } from './profile.types';
+import type { TranslationProvider } from '../contracts/providers';
 
 class ProfileDto implements TranslationProfile {
   @IsUUID()
@@ -33,8 +36,14 @@ class ProfileDto implements TranslationProfile {
   targetLanguage!: string;
 
   @IsOptional()
-  @IsIn(['openrouter', 'deepseek'])
-  provider?: 'openrouter' | 'deepseek';
+  @IsIn(['openrouter', 'deepseek', 'opencode-go'])
+  provider?: TranslationProvider;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  @Matches(/^[a-zA-Z0-9][a-zA-Z0-9._:/+@-]*$/)
+  model?: string;
 }
 
 class PutProfilesDto {

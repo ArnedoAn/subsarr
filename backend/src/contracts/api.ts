@@ -1,5 +1,10 @@
 // Public JSON transport contracts. Never add runtime settings or secrets here.
 // Run `node scripts/generate-contracts.cjs` after editing this file.
+import type {
+  TranslationProvider,
+  TranslationBillingTier,
+  TranslationQualityMode,
+} from './providers';
 export interface SubtitleTrack {
   index: number;
   language: string;
@@ -16,7 +21,7 @@ export interface MediaItem {
   path: string;
   name: string;
   type: 'movie' | 'episode' | 'unknown';
-  probeStatus: 'ok' | 'failed' | 'skipped';
+  probeStatus: 'ok' | 'failed' | 'skipped' | 'pending';
   subtitleTracks: SubtitleTrack[];
   externalSubtitles: ExternalSubtitle[];
   size: number;
@@ -89,6 +94,9 @@ export interface SettingsPayload {
   deepSeekApiKeyMasked: string;
   openRouterModel: string;
   deepSeekModel: string;
+  opencodeGoApiKeyMasked: string;
+  opencodeGoModel: string;
+  defaultProvider: TranslationProvider;
   scanCacheTtlMinutes: number;
   concurrency: number;
   pathContainsExclusions: string[];
@@ -141,6 +149,15 @@ export interface LibraryScanMetrics {
   itemFailures: number;
   directoryErrors: number;
   sidecarReadErrors: number;
+  pendingFiles?: number;
+  watcher?: {
+    enabled: boolean;
+    watching: number;
+    dirtyDirectories: number;
+    reconciling: boolean;
+    overflow: number;
+    errors: string[];
+  };
   wallTimeMs: number;
   discoveryWallTimeMs: number;
   buildWallTimeMs: number;
@@ -184,20 +201,35 @@ export interface JobResult {
     mediaItemPath: string;
     sourceLanguage: string;
     targetLanguage: string;
-    provider?: 'deepseek' | 'openrouter';
+    provider?: TranslationProvider;
+    model?: string;
+    sessionId?: string;
+    qualityMode?: TranslationQualityMode;
+    contextHint?: string;
+    useTranslationMemory?: boolean;
     triggeredBy?: 'manual' | 'batch' | 'auto-scan';
   };
   progress: number;
   state: string;
   returnValue?: {
     outputPath: string;
-    tierUsed: 'free' | 'paid';
+    tierUsed: TranslationBillingTier;
     usage: {
       promptTokens: number;
       completionTokens: number;
       totalTokens: number;
     };
     lineCount: number;
+    qualityReport?: {
+      warningCount: number;
+      errorCount: number;
+      suspectCueIndices: number[];
+    };
+    checkpointKey?: string;
+    checkpointReusedCues?: number;
+    memoryReusedCues?: number;
+    contextSheet?: string;
+    workspace?: { mediaItemId: string; subtitlePath: string };
   };
   failedReason?: string;
   createdAt: number;

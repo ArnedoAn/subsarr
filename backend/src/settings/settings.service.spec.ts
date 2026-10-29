@@ -10,6 +10,8 @@ import { runtimeToEntity } from './settings.mapper';
 import type { RuntimeSettings } from './settings.types';
 import { SecretStore } from './secret-store';
 
+const originalFetch = global.fetch;
+
 jest.mock('../common/path-safety', () => ({
   validateLanguageCode: (value: string) => value.toLowerCase(),
   assertWithinMediaRoots: jest.fn((candidate: string, roots: string[]) => {
@@ -31,6 +33,9 @@ const defaults: RuntimeSettings = {
   deepSeekApiKey: 'deepseek-secret',
   openRouterModel: 'openrouter/free',
   deepSeekModel: 'deepseek-chat',
+  opencodeGoApiKey: 'go-secret',
+  opencodeGoModel: 'glm-5.2',
+  defaultProvider: 'openrouter',
   scanCacheTtlMinutes: 30,
   concurrency: 2,
   pathContainsExclusions: [],
@@ -54,6 +59,9 @@ describe('SettingsService encrypted persistence and budgets', () => {
   let service: SettingsService;
   let save: jest.Mock<Promise<SettingEntity>, [SettingEntity]>;
   beforeEach(async () => {
+    global.fetch = jest
+      .fn<Promise<Response>, Parameters<typeof fetch>>()
+      .mockRejectedValue(new Error('Unexpected HTTP request in settings test'));
     directory = await fs.mkdtemp(path.join(os.tmpdir(), 'subsarr-settings-'));
     persisted = runtimeToEntity({ ...defaults });
     spent = 0;
@@ -74,6 +82,8 @@ describe('SettingsService encrypted persistence and budgets', () => {
     service = new SettingsService(config, repo, usage);
   });
   afterEach(async () => {
+    jest.restoreAllMocks();
+    global.fetch = originalFetch;
     await fs.rm(directory, { recursive: true, force: true });
   });
 
@@ -100,6 +110,206 @@ describe('SettingsService encrypted persistence and budgets', () => {
     const publicSettings = await service.getPublicSettings();
     expect(publicSettings.tmdbApiKeyMasked).toBe('••••••••');
     expect(JSON.stringify(publicSettings)).not.toContain('tmdb-secret');
+  });
+
+  it('encrypts Go keys, preserves blank inputs, exports explicitly, and clears on request', async () => {
+    expect((await service.getSettings()).opencodeGoApiKey).toBe('go-secret');
+    expect(persisted.opencodeGoApiKeyEncrypted).toMatch(/^enc:v1:/);
+    expect(
+      await new SecretStore(directory).decrypt(
+        persisted.opencodeGoApiKeyEncrypted ?? '',
+        'opencodeGoApiKey',
+      ),
+    ).toBe('go-secret');
+    expect(
+      (await service.getExportSettings()).opencodeGoApiKey,
+    ).toBeUndefined();
+    expect((await service.getExportSettings(true)).opencodeGoApiKey).toBe(
+      'go-secret',
+    );
+    await service.updateSettings({
+      ...defaults,
+      opencodeGoApiKey: '',
+      defaultProvider: 'opencode-go',
+    });
+    expect((await service.getPublicSettings()).opencodeGoApiKeyMasked).toBe(
+      '••••••••',
+    );
+    expect((await service.getSettings()).opencodeGoApiKey).toBe('go-secret');
+    await service.updateSettings({
+      ...defaults,
+      clearSecrets: ['opencodeGoApiKey'],
+    });
+    expect(persisted.opencodeGoApiKeyEncrypted).toBe('');
+    expect((await service.getPublicSettings()).opencodeGoApiKeyMasked).toBe('');
+  });
+
+  it('retains unreadable Go credentials and warnings until explicitly cleared', async () => {
+    persisted.opencodeGoApiKeyEncrypted = 'enc:v1:AAAA';
+    expect((await service.getPublicSettings()).secretWarnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ field: 'opencodeGoApiKey' }),
+      ]),
+    );
+    await service.updateSettings({ ...defaults, opencodeGoApiKey: undefined });
+    expect(persisted.opencodeGoApiKeyEncrypted).toBe('enc:v1:AAAA');
+    await service.updateSettings({
+      ...defaults,
+      clearSecrets: ['opencodeGoApiKey'],
+    });
+    expect((await service.getPublicSettings()).secretWarnings).toBeUndefined();
+  });
+
+  it('validates a changed Go credential once, caches the compatible catalog, and never queries at startup', async () => {
+    const request = jest.mocked(global.fetch).mockImplementation(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            data: [{ id: 'glm-5.2' }, { id: 'claude-sonnet' }],
+          }),
+        ),
+      ),
+    );
+    await service.getSettings();
+    expect(request).not.toHaveBeenCalled();
+    await service.updateSettings({
+      ...defaults,
+      opencodeGoApiKey: 'replacement-go',
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith(
+      'https://opencode.ai/inference/go/v1/models',
+      expect.objectContaining({
+        headers: {
+          Authorization: 'Bearer replacement-go',
+          'User-Agent': expect.stringMatching(
+            /^Subsarr\//,
+          ) as unknown as string,
+        },
+        redirect: 'error',
+      }),
+    );
+    expect(await service.fetchOpenCodeGoModels()).toEqual({
+      source: 'remote',
+      models: [{ id: 'glm-5.2', name: 'glm-5.2' }],
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses a cached documented catalog with an explicit offline warning and rejects invalid replacement credentials', async () => {
+    const request = jest
+      .mocked(global.fetch)
+      .mockRejectedValue(new Error('offline'));
+    const catalogs = await Promise.all([
+      service.fetchOpenCodeGoModels(),
+      service.fetchOpenCodeGoModels(),
+    ]);
+    expect(catalogs[0]).toMatchObject({
+      source: 'documented',
+      warning: expect.stringContaining('not verified') as unknown as string,
+    });
+    expect(catalogs[0].models).toContainEqual({
+      id: 'glm-5.2',
+      name: 'glm-5.2',
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+    await service.fetchOpenCodeGoModels();
+    expect(request).toHaveBeenCalledTimes(1);
+    await expect(
+      service.updateSettings({ ...defaults, opencodeGoApiKey: 'invalid' }),
+    ).rejects.toThrow();
+    expect((await service.getSettings()).opencodeGoApiKey).toBe('go-secret');
+  });
+
+  it('cancels an oversized streamed catalog before parsing and returns the documented fallback', async () => {
+    const cancel = jest.fn();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(256 * 1024 + 1));
+      },
+      cancel,
+    });
+    const request = jest
+      .mocked(global.fetch)
+      .mockResolvedValue(new Response(body));
+    expect(await service.fetchOpenCodeGoModels()).toMatchObject({
+      source: 'documented',
+      warning: expect.stringContaining('not verified') as unknown as string,
+    });
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls[0][1]?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it.each(['null', '{"data":null}', '{broken'])(
+    'rejects malformed catalogs safely: %s',
+    async (body) => {
+      jest
+        .mocked(global.fetch)
+        .mockImplementation(() => Promise.resolve(new Response(body)));
+      expect(await service.fetchOpenCodeGoModels()).toMatchObject({
+        source: 'documented',
+        warning: expect.any(String) as unknown as string,
+      });
+      await expect(
+        service.updateSettings({
+          ...defaults,
+          opencodeGoApiKey: 'replacement',
+        }),
+      ).rejects.toThrow();
+      expect((await service.getSettings()).opencodeGoApiKey).toBe('go-secret');
+    },
+  );
+
+  it('refreshes the compatible catalog after its five-minute TTL', async () => {
+    const now = jest.spyOn(Date, 'now').mockReturnValue(1000);
+    const request = jest
+      .mocked(global.fetch)
+      .mockImplementation(() =>
+        Promise.resolve(new Response('{"data":[{"id":"glm-5.2"}]}')),
+      );
+    await service.fetchOpenCodeGoModels();
+    now.mockReturnValue(300999);
+    await service.fetchOpenCodeGoModels();
+    expect(request).toHaveBeenCalledTimes(1);
+    now.mockReturnValue(301000);
+    await service.fetchOpenCodeGoModels();
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['', 'bad model', 'model\nheader', 'a'.repeat(129)])(
+    'rejects unsafe saved provider model identifiers %p',
+    async (model) => {
+      await expect(
+        service.updateSettings({ ...defaults, openRouterModel: model }),
+      ).rejects.toThrow('model');
+      await expect(
+        service.updateSettings({ ...defaults, deepSeekModel: model }),
+      ).rejects.toThrow('model');
+      expect(global.fetch).not.toHaveBeenCalled();
+    },
+  );
+
+  it('exempts subscriptions from paid budgets and resets provider/model/key to environment defaults', async () => {
+    await service.updateSettings({
+      ...defaults,
+      defaultProvider: 'opencode-go',
+      opencodeGoModel: 'kimi-k3',
+      monthlyBudgetUsd: 0,
+    });
+    await expect(
+      service.assertTranslationBudget({ automatic: true }),
+    ).resolves.toBeUndefined();
+    await expect(
+      service.assertTranslationBudget({
+        provider: 'deepseek',
+        automatic: true,
+      }),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(await service.resetToEnvDefaults()).toMatchObject({
+      defaultProvider: 'openrouter',
+      opencodeGoModel: 'glm-5.2',
+      opencodeGoApiKeyMasked: '••••••••',
+    });
   });
 
   it('preserves blank/masked keys and clears Jellyfin credentials when host changes', async () => {

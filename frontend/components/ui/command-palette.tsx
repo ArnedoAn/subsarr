@@ -13,6 +13,7 @@ export const NAVIGATION_COMMANDS = [
   { href: '/dashboard', label: 'Overview', icon: 'dashboard', keywords: 'statistics tokens usage spending' },
   { href: '/settings', label: 'Settings', icon: 'settings', keywords: 'providers keys budget roots language rules' },
   { href: '/rename', label: 'Rename', icon: 'drive_file_rename_outline', keywords: 'tools files organize preview undo' },
+  { href: '/review', label: 'Subtitle Review', icon: 'fact_check', keywords: 'quality compare edit cues retranslate memory readability context' },
 ];
 export function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [query, setQuery] = useState('');

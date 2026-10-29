@@ -109,7 +109,7 @@ export class LibraryScanSchedulerService implements OnModuleInit {
       if (before !== null) {
         for (const item of before) {
           if (this.knownItemIds.has(item.id)) continue;
-          if (item.probeStatus === 'failed') {
+          if (item.probeStatus === 'failed' || item.probeStatus === 'pending') {
             this.pendingProbeItemIds.add(item.id);
           } else if (!this.pendingProbeItemIds.has(item.id)) {
             this.knownItemIds.add(item.id);
@@ -128,7 +128,7 @@ export class LibraryScanSchedulerService implements OnModuleInit {
       // Keep known history so an already handled item never becomes new again.
       for (const item of items) {
         if (this.knownItemIds.has(item.id)) continue;
-        if (item.probeStatus === 'failed') {
+        if (item.probeStatus === 'failed' || item.probeStatus === 'pending') {
           this.pendingProbeItemIds.add(item.id);
           continue;
         }

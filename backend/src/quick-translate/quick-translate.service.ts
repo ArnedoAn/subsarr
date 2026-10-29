@@ -14,6 +14,8 @@ import { SubtitleTranslationService } from '../translation/subtitle-translation.
 import { SettingsService } from '../settings/settings.service';
 import { TokenUsageService } from '../settings/token-usage.service';
 import { validateLanguageCode } from '../common/path-safety';
+import { resolveProviderModel } from '../common/translation-provider';
+import { WorkspaceService } from '../translation-workspace/workspace.service';
 import {
   QuickBatchSnapshot,
   QuickFileSnapshot,
@@ -50,6 +52,7 @@ export class QuickTranslateService implements OnModuleInit, OnModuleDestroy {
     private readonly documents: SubtitleTranslationService,
     private readonly settings: SettingsService,
     private readonly usage: TokenUsageService,
+    private readonly workspaces: WorkspaceService,
   ) {}
 
   onModuleInit(): void {
@@ -92,6 +95,7 @@ export class QuickTranslateService implements OnModuleInit, OnModuleDestroy {
       );
     options = {
       ...options,
+      ...resolveProviderModel(await this.settings.getSettings(), options),
       targetLanguage: validateLanguageCode(options.targetLanguage),
       sourceLanguage: options.sourceLanguage
         ? validateLanguageCode(options.sourceLanguage)
@@ -151,6 +155,8 @@ export class QuickTranslateService implements OnModuleInit, OnModuleDestroy {
           state: 'queued',
           progress: 0,
           cueCount: inspected[index].cueCount,
+          provider: options.provider,
+          model: options.model,
           warnings: [],
         };
       }),
@@ -230,6 +236,26 @@ export class QuickTranslateService implements OnModuleInit, OnModuleDestroy {
     return { name: file.downloadName, content: file.result };
   }
 
+  async createWorkspace(
+    id: string,
+    fileId: string,
+  ): Promise<{ id: string; revision: number }> {
+    const batch = this.get(id);
+    const file = this.file(batch, fileId);
+    if (file.state !== 'completed' || !file.input || !file.result)
+      throw new ConflictException('Translation is not ready for review');
+    return this.workspaces.create({
+      source: file.input,
+      translated: file.result,
+      filename: file.name,
+      sourceLang: batch.options.sourceLanguage ?? 'auto',
+      targetLang: batch.options.targetLanguage,
+      provider: batch.options.provider,
+      model: batch.options.model,
+      contextHint: file.contextSheet ?? batch.options.contextHint,
+    });
+  }
+
   downloads(id: string): Array<{ name: string; content: Buffer }> {
     const batch = this.get(id);
     const ready = batch.files.filter((file) => file.state === 'completed');
@@ -282,6 +308,8 @@ export class QuickTranslateService implements OnModuleInit, OnModuleDestroy {
             file.name,
             {
               ...batch.options,
+              sessionId: file.id,
+              persistence: 'ephemeral',
               automatic: false,
               signal: file.controller.signal,
               onUsage: async (attempt) => {
@@ -313,9 +341,20 @@ export class QuickTranslateService implements OnModuleInit, OnModuleDestroy {
           file.warnings = translated.warnings
             .slice(0, 20)
             .map((warning) => warning.slice(0, 1000));
+          file.qualityReport = translated.qualityReport
+            ? {
+                warningCount: translated.qualityReport.warningCount,
+                errorCount: translated.qualityReport.errorCount,
+                suspectCueIndices: translated.qualityReport.suspectCueIndices,
+              }
+            : undefined;
+          file.checkpointReusedCues = translated.checkpointReusedCues;
+          file.memoryReusedCues = translated.memoryReusedCues;
+          file.contextSheet = translated.contextSheet;
+          file.tierUsed = translated.tierUsed;
+          file.usage = translated.usage;
           file.progress = 100;
           file.state = 'completed';
-          this.releaseInput(file);
         } catch (error) {
           if (!this.batches.has(batch.id)) continue;
           if (file.controller.signal.aborted) {
@@ -402,6 +441,14 @@ export class QuickTranslateService implements OnModuleInit, OnModuleDestroy {
           error,
           errorCode,
           warnings,
+          qualityReport,
+          checkpointReusedCues,
+          memoryReusedCues,
+          contextSheet,
+          provider,
+          model,
+          tierUsed,
+          usage,
         }) => ({
           id,
           name,
@@ -412,6 +459,14 @@ export class QuickTranslateService implements OnModuleInit, OnModuleDestroy {
           error,
           errorCode,
           warnings,
+          qualityReport,
+          checkpointReusedCues,
+          memoryReusedCues,
+          contextSheet,
+          provider,
+          model,
+          tierUsed,
+          usage,
         }),
       ),
     };

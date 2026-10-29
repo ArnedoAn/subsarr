@@ -13,7 +13,10 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  verify:
+    uses: ./.github/workflows/verify.yml
   build-and-push:
+    needs: verify
     runs-on: ubuntu-latest
     permissions:
       contents: read

@@ -1,4 +1,5 @@
 import { Column, Entity, PrimaryColumn, UpdateDateColumn } from 'typeorm';
+import type { TranslationProvider } from '../../contracts/providers';
 
 @Entity('settings')
 export class SettingEntity {
@@ -25,6 +26,15 @@ export class SettingEntity {
 
   @Column({ type: 'varchar', length: 128, default: 'deepseek-chat' })
   deepSeekModel: string;
+
+  @Column({ type: 'text', nullable: true })
+  opencodeGoApiKeyEncrypted: string | null;
+
+  @Column({ type: 'varchar', length: 128, default: 'glm-5.2' })
+  opencodeGoModel: string;
+
+  @Column({ type: 'varchar', length: 32, default: 'openrouter' })
+  defaultProvider: TranslationProvider;
 
   @Column({ type: 'integer' })
   scanCacheTtlMinutes: number;

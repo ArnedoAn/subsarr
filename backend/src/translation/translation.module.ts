@@ -4,9 +4,14 @@ import { TranslationVerificationService } from './translation-verification.servi
 import { SettingsModule } from '../settings/settings.module';
 import { GlossaryModule } from '../glossary/glossary.module';
 import { SubtitleTranslationService } from './subtitle-translation.service';
+import { WorkspacePersistenceModule } from '../translation-workspace/workspace-persistence.module';
 
 @Module({
-  imports: [forwardRef(() => SettingsModule), GlossaryModule],
+  imports: [
+    forwardRef(() => SettingsModule),
+    GlossaryModule,
+    WorkspacePersistenceModule,
+  ],
   providers: [
     TranslationService,
     TranslationVerificationService,

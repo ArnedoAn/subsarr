@@ -130,6 +130,12 @@ export class TranslationJobProcessor {
           sourceLanguage: job.data.sourceLanguage,
           targetLanguage: job.data.targetLanguage,
           provider: job.data.provider,
+          model: job.data.model,
+          sessionId: job.data.sessionId ?? jobId,
+          qualityMode: job.data.qualityMode,
+          contextHint: job.data.contextHint,
+          useTranslationMemory: job.data.useTranslationMemory,
+          persistence: 'checkpoint',
           signal: control.signal,
           automatic: job.data.automatic ?? job.data.triggeredBy === 'auto-scan',
           allowBudgetOverride: job.data.allowBudgetOverride,
@@ -185,6 +191,20 @@ export class TranslationJobProcessor {
         tierUsed: translated.tierUsed,
         usage: translated.usage,
         lineCount: translated.cueCount,
+        provider: job.data.provider,
+        model: job.data.model,
+        qualityReport: translated.qualityReport
+          ? {
+              warningCount: translated.qualityReport.warningCount,
+              errorCount: translated.qualityReport.errorCount,
+              suspectCueIndices: translated.qualityReport.suspectCueIndices,
+            }
+          : undefined,
+        checkpointKey: translated.checkpointKey,
+        checkpointReusedCues: translated.checkpointReusedCues,
+        memoryReusedCues: translated.memoryReusedCues,
+        contextSheet: translated.contextSheet,
+        workspace: { mediaItemId: item.id, subtitlePath: outputPath },
       };
       committedResult = result;
       await job.discard();

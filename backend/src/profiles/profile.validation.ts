@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import { isUUID } from 'class-validator';
 import type { TranslationProfile } from './profile.types';
+import { validateProviderModel } from '../common/translation-provider';
 
 export const MAX_PROFILES = 500;
 
@@ -25,6 +26,7 @@ export function validateProfiles(value: unknown): TranslationProfile[] {
       'sourceLanguage',
       'targetLanguage',
       'provider',
+      'model',
     ];
     if (Object.keys(profile).some((key) => !allowed.includes(key)))
       return fail();
@@ -50,9 +52,18 @@ export function validateProfiles(value: unknown): TranslationProfile[] {
       targetLanguage: text('targetLanguage', 64),
     };
     if (profile.provider !== undefined) {
-      if (profile.provider !== 'openrouter' && profile.provider !== 'deepseek')
+      if (
+        profile.provider !== 'openrouter' &&
+        profile.provider !== 'deepseek' &&
+        profile.provider !== 'opencode-go'
+      )
         return fail();
       result.provider = profile.provider;
+    }
+    if (profile.model !== undefined) {
+      const model = text('model', 128);
+      validateProviderModel(result.provider, model);
+      result.model = model;
     }
     return result;
   });

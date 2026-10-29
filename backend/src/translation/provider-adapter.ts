@@ -1,9 +1,12 @@
 import OpenAI from 'openai';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { ProviderLimiter, throwIfAborted } from './provider-limiter';
 import type { ProviderUsage } from './translation.service';
 import { isFreeOpenRouterModel } from '../settings/provider-pricing';
-export type Provider = 'deepseek' | 'openrouter';
+import type { TranslationProvider } from '../contracts/providers';
+import { validateProviderModel } from '../common/translation-provider';
+export type Provider = TranslationProvider;
+const goLimiter = new ProviderLimiter(2);
 export interface ProviderRequest {
   provider: Provider;
   apiKey: string;
@@ -11,6 +14,7 @@ export interface ProviderRequest {
   system: string;
   user: string;
   signal?: AbortSignal;
+  sessionId?: string;
   onUsage?: (usage: ProviderUsage) => void | Promise<void>;
   beforeRequest?: () => Promise<void>;
 }
@@ -20,15 +24,20 @@ export class ProviderAdapter {
   private readonly limiters: Record<Provider, ProviderLimiter> = {
     deepseek: new ProviderLimiter(5),
     openrouter: new ProviderLimiter(3),
+    'opencode-go': goLimiter,
   };
   async request(request: ProviderRequest): Promise<string> {
     throwIfAborted(request.signal);
     if (!request.apiKey.trim())
       throw new Error(`Missing ${request.provider} API key`);
+    if (request.provider === 'opencode-go')
+      validateProviderModel(request.provider, request.model);
     const baseURL =
       request.provider === 'deepseek'
         ? 'https://api.deepseek.com'
-        : 'https://openrouter.ai/api/v1';
+        : request.provider === 'opencode-go'
+          ? 'https://opencode.ai/inference/go/openai/v1'
+          : 'https://openrouter.ai/api/v1';
     const cacheKey = createHash('sha256')
       .update(baseURL)
       .update('\0')
@@ -41,6 +50,13 @@ export class ProviderAdapter {
         apiKey: request.apiKey.trim(),
         maxRetries: 0,
         timeout: 120000,
+        ...(request.provider === 'opencode-go'
+          ? {
+              defaultHeaders: {
+                'User-Agent': `Subsarr/${process.env.npm_package_version ?? '0.0.1'}`,
+              },
+            }
+          : {}),
       });
       if (this.clients.size >= 8) {
         for (const oldestKey of this.clients.keys()) {
@@ -54,19 +70,49 @@ export class ProviderAdapter {
     return this.limiters[request.provider].run(async () => {
       await request.beforeRequest?.();
       throwIfAborted(request.signal);
-      const response = await sdk.chat.completions.create(
-        {
-          model: request.model,
-          ...(request.provider === 'deepseek' ? { temperature: 1.3 } : {}),
-          response_format: { type: 'json_object' },
-          max_tokens: 8192,
-          messages: [
-            { role: 'system', content: request.system },
-            { role: 'user', content: request.user },
-          ],
-        },
-        { signal: request.signal },
-      );
+      const response = await sdk.chat.completions
+        .create(
+          {
+            model: request.model,
+            ...(request.provider === 'deepseek' ? { temperature: 1.3 } : {}),
+            response_format: { type: 'json_object' },
+            max_tokens: 8192,
+            messages: [
+              { role: 'system', content: request.system },
+              { role: 'user', content: request.user },
+            ],
+          },
+          {
+            signal: request.signal,
+            ...(request.provider === 'opencode-go'
+              ? {
+                  headers: {
+                    'x-opencode-session': request.sessionId ?? randomUUID(),
+                  },
+                }
+              : {}),
+          },
+        )
+        .catch((error: unknown) => {
+          throwIfAborted(request.signal);
+          if (request.provider !== 'opencode-go') throw error;
+          const status =
+            error && typeof error === 'object' && 'status' in error
+              ? error.status
+              : undefined;
+          const explanation =
+            status === 429
+              ? 'subscription quota or rate limit reached; wait for quota renewal or retry later'
+              : status === 401 || status === 403
+                ? 'authentication or subscription access denied; check the configured Go API key and subscription'
+                : status === 400 || status === 404 || status === 422
+                  ? 'chat model or strict JSON request rejected; select a supported Go chat model'
+                  : 'chat request failed; check Go service availability';
+          throw new Error(
+            `OpenCode Go: ${explanation}. No external paid fallback was attempted.`,
+            { cause: error },
+          );
+        });
       const usage = response.usage;
       const details = usage as typeof usage & {
         prompt_cache_hit_tokens?: number;
@@ -84,11 +130,13 @@ export class ProviderAdapter {
           ? details.cost
           : undefined;
       const tier =
-        request.provider === 'deepseek' ||
-        !isFreeOpenRouterModel(request.model) ||
-        (costUsd ?? 0) > 0
-          ? 'paid'
-          : 'free';
+        request.provider === 'opencode-go'
+          ? 'subscription'
+          : request.provider === 'deepseek' ||
+              !isFreeOpenRouterModel(request.model) ||
+              (costUsd ?? 0) > 0
+            ? 'paid'
+            : 'free';
       await request.onUsage?.({
         provider: request.provider,
         model: request.model,
@@ -100,7 +148,11 @@ export class ProviderAdapter {
         cacheMissTokens:
           details?.prompt_cache_miss_tokens ??
           Math.max(0, (usage?.prompt_tokens ?? 0) - hit),
-        ...(costUsd !== undefined ? { costUsd } : {}),
+        ...(request.provider === 'opencode-go'
+          ? { costUsd: 0 }
+          : costUsd !== undefined
+            ? { costUsd }
+            : {}),
       });
       throwIfAborted(request.signal);
       if (response.choices[0]?.finish_reason !== 'stop')

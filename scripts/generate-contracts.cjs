@@ -3,14 +3,29 @@ const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
 const sources = [
+  'backend/src/contracts/providers.ts',
   'backend/src/contracts/api.ts',
   'backend/src/rename/rename.types.ts',
   'backend/src/quick-translate/quick-translate.types.ts',
+  'backend/src/library/scan-history.types.ts',
+  'backend/src/system/system.types.ts',
+  'backend/src/translation-workspace/workspace.types.ts',
+  'backend/src/translation-workspace/review.types.ts',
 ];
+const sourceSet = new Set(sources.map((source) => path.join(root, source)));
+const TYPE_IMPORT = /^import\s+type\s+\{[^}]*\}\s+from\s+'([^']+)';\r?\n/gm;
 const parts = sources.map((source) => {
-  const content = fs.readFileSync(path.join(root, source), 'utf8');
+  const absolute = path.join(root, source);
+  const content = fs.readFileSync(absolute, 'utf8').replace(TYPE_IMPORT, (statement, specifier) => {
+    const target = path.resolve(path.dirname(absolute), `${specifier}.ts`);
+    if (!sourceSet.has(target)) {
+      throw new Error(`${source} imports ${specifier}, which is not a generated contract source`);
+    }
+    // Generated output is one module, so imports between contract sources are dropped.
+    return '';
+  });
   if (/^import\s/m.test(content)) {
-    throw new Error(`${source} must contain only self-contained transport declarations`);
+    throw new Error(`${source} may only use type-only imports from other contract sources`);
   }
   return `// Source: ${source}\n${content.trim()}\n`;
 });

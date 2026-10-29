@@ -1,4 +1,4 @@
-export type SubtitleOutputExtension = 'srt' | 'ass';
+export type SubtitleOutputExtension = 'srt' | 'ass' | 'ssa' | 'vtt';
 
 /** ffprobe codec_name values for embedded ASS/SSA subtitle streams */
 const ASS_SUBTITLE_CODECS = new Set([

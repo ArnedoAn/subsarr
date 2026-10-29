@@ -1,5 +1,6 @@
 import type { SecretField } from './secret-store';
 import type { SettingsPayload } from '../contracts/api';
+import type { TranslationProvider } from '../contracts/providers';
 
 export interface RuleToggleConfig {
   id: string;
@@ -14,6 +15,9 @@ export interface RuntimeSettings {
   deepSeekApiKey: string;
   openRouterModel: string;
   deepSeekModel: string;
+  opencodeGoApiKey?: string;
+  opencodeGoModel?: string;
+  defaultProvider?: TranslationProvider;
   scanCacheTtlMinutes: number;
   concurrency: number;
   pathContainsExclusions: string[];
@@ -51,6 +55,9 @@ export interface UpdateSettingsInput {
   deepSeekApiKey?: string;
   openRouterModel?: string;
   deepSeekModel?: string;
+  opencodeGoApiKey?: string;
+  opencodeGoModel?: string;
+  defaultProvider?: TranslationProvider;
   scanCacheTtlMinutes: number;
   concurrency: number;
   pathContainsExclusions: string[];

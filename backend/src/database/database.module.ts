@@ -21,6 +21,12 @@ import { AddRenameJournal1738700000004 } from '../migrations/1738700000004-AddRe
 import { SettingsSecretsAndUsage1738700000005 } from '../migrations/1738700000005-SettingsSecretsAndUsage';
 import { JobSchedulerStateEntity } from './entities/job-scheduler-state.entity';
 import { JobSchedulerState1738700000006 } from '../migrations/1738700000006-JobSchedulerState';
+import { AddOpenCodeGo1738700000007 } from '../migrations/1738700000007-AddOpenCodeGo';
+import { LibraryScanRunEntity } from '../library/scan-run.entity';
+import { AddLibraryScanRuns1738700000009 } from '../migrations/1738700000009-AddLibraryScanRuns';
+import { WorkspaceCheckpointEntity } from './entities/workspace-checkpoint.entity';
+import { WorkspaceMemoryEntity } from './entities/workspace-memory.entity';
+import { AddTranslationWorkspace1738700000008 } from '../migrations/1738700000008-AddTranslationWorkspace';
 
 @Module({
   imports: [
@@ -53,6 +59,9 @@ import { JobSchedulerState1738700000006 } from '../migrations/1738700000006-JobS
             MediaInventoryEntity,
             RenameJournalEntity,
             JobSchedulerStateEntity,
+            LibraryScanRunEntity,
+            WorkspaceCheckpointEntity,
+            WorkspaceMemoryEntity,
           ],
           migrations: [
             InitialSchema1738700000000,
@@ -62,6 +71,9 @@ import { JobSchedulerState1738700000006 } from '../migrations/1738700000006-JobS
             AddRenameJournal1738700000004,
             SettingsSecretsAndUsage1738700000005,
             JobSchedulerState1738700000006,
+            AddOpenCodeGo1738700000007,
+            AddTranslationWorkspace1738700000008,
+            AddLibraryScanRuns1738700000009,
           ],
           migrationsRun: true,
           synchronize: false,

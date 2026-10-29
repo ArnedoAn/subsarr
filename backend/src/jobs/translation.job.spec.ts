@@ -176,6 +176,56 @@ describe('TranslationJobProcessor cancellation and accounting', () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
+  it('passes checkpoint quality options and archives bounded quality results with review hints', async () => {
+    const f = fixture();
+    Object.assign(f.job.data, {
+      provider: 'opencode-go',
+      model: 'glm-5.2',
+      qualityMode: 'review',
+      contextHint: 'A comedy',
+      useTranslationMemory: true,
+    });
+    f.translate.translateDocument.mockResolvedValue({
+      ...f.translationResult,
+      qualityReport: {
+        cues: [],
+        warningCount: 2,
+        errorCount: 0,
+        suspectCueIndices: [1],
+      },
+      checkpointKey: 'checkpoint',
+      checkpointReusedCues: 3,
+      memoryReusedCues: 4,
+      contextSheet: 'Context',
+    });
+    await expect(f.processor.handle(f.job)).resolves.toMatchObject({
+      provider: 'opencode-go',
+      model: 'glm-5.2',
+      qualityReport: { warningCount: 2, errorCount: 0, suspectCueIndices: [1] },
+      checkpointKey: 'checkpoint',
+      checkpointReusedCues: 3,
+      memoryReusedCues: 4,
+      contextSheet: 'Context',
+      workspace: { mediaItemId: 'media', subtitlePath: '/media/title.spa.srt' },
+    });
+    expect(f.translate.translateDocument.mock.calls[0][2]).toMatchObject({
+      persistence: 'checkpoint',
+      provider: 'opencode-go',
+      model: 'glm-5.2',
+      qualityMode: 'review',
+      contextHint: 'A comedy',
+      useTranslationMemory: true,
+    });
+    expect(f.archive.appendSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        state: 'completed',
+        returnValue: expect.objectContaining({
+          checkpointKey: 'checkpoint',
+          memoryReusedCues: 4,
+        }) as unknown as { checkpointKey: string; memoryReusedCues: number },
+      }),
+    );
+  });
   it.each(['vtt', 'ssa'] as const)(
     'rejects a translated %s document before publishing media output',
     async (extension) => {

@@ -4,6 +4,7 @@ import { RulesService } from '../rules/rules.service';
 import { OutputService } from '../output/output.service';
 import { ExtractionService } from '../extraction/extraction.service';
 import { type MediaItem } from './media-item.entity';
+import { ScanHistoryService } from './scan-history.service';
 
 function fixture(
   id: string,
@@ -77,6 +78,7 @@ describe('LibraryController query cutover', () => {
       rules as unknown as RulesService,
       {} as OutputService,
       {} as ExtractionService,
+      {} as ScanHistoryService,
     );
   });
 

@@ -46,6 +46,54 @@ export function chunkCues(
   }
   return chunks;
 }
+/**
+ * Last-resort line rebalance when a provider keeps changing a cue's line count:
+ * joins the text and splits it into `lineCount` lines at whitespace outside
+ * markup, balancing line lengths. Markup and words are unchanged. Returns null
+ * when there are not enough split points.
+ */
+export function rewrapLines(text: string, lineCount: number): string | null {
+  const joined = text
+    .split(/\r\n|\r|\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join(' ');
+  if (lineCount <= 1) return joined || null;
+  const protectedRanges = [...joined.matchAll(SUBTITLE_MARKUP)].map(
+    (match) => [match.index, match.index + match[0].length] as const,
+  );
+  const candidates: number[] = [];
+  for (let i = 0; i < joined.length; i++)
+    if (
+      joined[i] === ' ' &&
+      !protectedRanges.some(([start, end]) => i >= start && i < end)
+    )
+      candidates.push(i);
+  if (candidates.length < lineCount - 1) return null;
+  const splits: number[] = [];
+  let from = 0;
+  for (let line = 1; line < lineCount; line++) {
+    const target = (joined.length * line) / lineCount;
+    // Leave enough later candidates for the remaining splits.
+    const usable = candidates.slice(
+      from,
+      candidates.length - (lineCount - 1 - line),
+    );
+    let best = 0;
+    for (let i = 1; i < usable.length; i++)
+      if (Math.abs(usable[i] - target) < Math.abs(usable[best] - target))
+        best = i;
+    splits.push(usable[best]);
+    from += best + 1;
+  }
+  let result = '';
+  let start = 0;
+  for (const split of splits) {
+    result += `${joined.slice(start, split)}\n`;
+    start = split + 1;
+  }
+  return result + joined.slice(start);
+}
 export interface ProtectedCue {
   text: string;
   restore: (translated: string) => string;

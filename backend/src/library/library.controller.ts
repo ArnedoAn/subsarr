@@ -7,7 +7,8 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { IsOptional, IsString } from 'class-validator';
+import { IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { Type } from 'class-transformer';
 import { promises as fs } from 'node:fs';
 import { LibraryService } from './library.service';
 import { RulesService } from '../rules/rules.service';
@@ -16,6 +17,28 @@ import { OutputService } from '../output/output.service';
 import { ExtractionService } from '../extraction/extraction.service';
 import { PreviewSubtitleDto } from './dto/preview-subtitle.dto';
 import { canonicalizeLanguage } from '../common/language.utils';
+import { ScanHistoryService } from './scan-history.service';
+
+class ScanPageQueryDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  offset = 0;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  limit = 20;
+}
+
+class ScanExportQueryDto {
+  @IsOptional()
+  @IsIn(['true', 'false'])
+  redact?: string;
+}
 
 class LibraryItemQueryDto {
   @IsOptional()
@@ -38,6 +61,7 @@ export class LibraryController {
     private readonly rulesService: RulesService,
     private readonly outputService: OutputService,
     private readonly extractionService: ExtractionService,
+    private readonly scanHistory: ScanHistoryService,
   ) {}
 
   @Get()
@@ -188,6 +212,27 @@ export class LibraryController {
   @Get('scan-status')
   getScanStatus() {
     return this.libraryService.getScanStatus();
+  }
+
+  @Get('scans')
+  scans(@Query() query: ScanPageQueryDto) {
+    return this.scanHistory.list(query.offset, query.limit);
+  }
+
+  @Get('scans/:id/export')
+  @Header('Content-Disposition', 'attachment; filename="library-scan.json"')
+  exportScan(@Param('id') id: string, @Query() query: ScanExportQueryDto) {
+    return this.scanHistory.export(id, query.redact !== 'false');
+  }
+
+  @Get('scans/:id')
+  scan(@Param('id') id: string) {
+    return this.scanHistory.get(id);
+  }
+
+  @Get('watch-status')
+  watchStatus() {
+    return this.libraryService.getWatchStatus();
   }
 
   @Get(':id')

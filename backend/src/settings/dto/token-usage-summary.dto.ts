@@ -7,11 +7,13 @@ export interface TierUsageSummary {
 export interface TokenUsageSummary {
   free: TierUsageSummary;
   paid: TierUsageSummary;
+  subscription: TierUsageSummary;
   estimatedCostUsd: number;
   /** UTC calendar day (today): tokens persisted for that date only. */
   today?: {
     free: TierUsageSummary;
     paid: TierUsageSummary;
+    subscription: TierUsageSummary;
     estimatedCostUsd: number;
   };
 }

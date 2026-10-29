@@ -14,6 +14,9 @@ import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { ProgressBar } from '@/components/ui/progress-bar';
 import { useToast } from '@/components/ui/toast';
+import { ProviderModelPicker, useTranslationSelection } from '@/components/provider-model-picker';
+import { INITIAL_QUALITY, TranslationQualityOptions } from '@/components/translation-quality-options';
+import { TranslationResultSummary } from '@/components/translation-result-summary';
 
 interface ItemDetail extends MediaItem { rules: RuleEvaluation[]; }
 
@@ -92,7 +95,8 @@ export function ItemDetail({ id }: { id: string }) {
   const [sourceLanguage, setSourceLanguage]     = useState('eng');
   const [targetLanguage, setTargetLanguage]     = useState('spa');
   const [forceBypass, setForceBypass]           = useState(false);
-  const [provider, setProvider]                 = useState<'openrouter' | 'deepseek'>('openrouter');
+  const selection = useTranslationSelection();
+  const [quality, setQuality] = useState(INITIAL_QUALITY);
   const [targetConflictResolution, setTargetConflictResolution] = useState<
     'default' | 'replace' | 'alternate'
   >('default');
@@ -212,7 +216,7 @@ export function ItemDetail({ id }: { id: string }) {
   }, [activeJobId]);
 
   const queue = async (allowBudgetOverride = false) => {
-    if (!item || sourceTrackIndex === null) return;
+    if (!item || sourceTrackIndex === null || !selection.settings) return;
     setQueuing(true);
     try {
       await apiPost('/jobs', {
@@ -223,7 +227,9 @@ export function ItemDetail({ id }: { id: string }) {
         sourceTrackIndex,
         triggeredBy: 'manual',
         forceBypassRules: forceBypass,
-        provider,
+        provider: selection.provider,
+        model: selection.model.trim() || undefined,
+        ...quality,
         allowBudgetOverride,
         targetConflictResolution:
           targetConflictResolution === 'default'
@@ -301,6 +307,7 @@ export function ItemDetail({ id }: { id: string }) {
               </span>
               <Badge variant="neutral">{item.type}</Badge>
             </div>
+            {item.probeStatus === 'pending' && <p role="status" className="mt-2 text-xs text-warning">Pending download stability — probing and translation are unavailable until this file is stable.</p>}
           </div>
         </div>
       </div>
@@ -446,25 +453,9 @@ export function ItemDetail({ id }: { id: string }) {
               </div>
             </div>
 
-            {/* Provider */}
-            <div className="space-y-2 sm:space-y-0 sm:flex sm:items-center sm:gap-3">
-              <label className="field-label flex-shrink-0">Provider</label>
-              <div className="grid grid-cols-1 sm:flex gap-2">
-                {(['openrouter', 'deepseek'] as const).map(p => (
-                  <button
-                    key={p}
-                    onClick={() => setProvider(p)}
-                    className={`px-3 py-2 rounded-md text-xs font-medium transition-all text-left sm:text-center ${
-                      provider === p
-                        ? 'bg-primary/10 text-primary border border-primary/30'
-                        : 'bg-surface-container-high text-on-surface-variant border border-outline-variant/30 hover:text-on-surface'
-                    }`}
-                  >
-                    {p === 'openrouter' ? 'OpenRouter (Free)' : 'DeepSeek (Paid)'}
-                  </button>
-                ))}
-              </div>
-            </div>
+            <ProviderModelPicker provider={selection.provider} model={selection.model} onProviderChange={selection.setProvider} onModelChange={selection.setModel} disabled={queuing || !selection.settings} />
+            {selection.error && <p role="alert" className="text-error">{selection.error}</p>}
+            <TranslationQualityOptions value={quality} onChange={setQuality} disabled={queuing} />
 
             {/* Target file already exists */}
             {hasTargetLanguageConflict && (
@@ -556,7 +547,7 @@ export function ItemDetail({ id }: { id: string }) {
               variant="primary"
               loading={queuing}
               disabled={
-                rulesLoading || !!rulesError || item.subtitleTracks.length === 0 ||
+                !selection.settings || item.probeStatus !== 'ok' || rulesLoading || !!rulesError || item.subtitleTracks.length === 0 ||
                 (isBlocked && !forceBypass)
               }
               iconLeft={queuing ? undefined : 'send'}
@@ -666,6 +657,7 @@ export function ItemDetail({ id }: { id: string }) {
                       </span>
                     )}
                   </div>
+                  {job.returnValue && <TranslationResultSummary result={job.returnValue} mediaItemId={job.state === 'completed' ? item.id : undefined} />}
                   {job.state === 'failed' && job.failedReason && (
                     <p className="text-xs text-error mt-1 truncate">{job.failedReason}</p>
                   )}

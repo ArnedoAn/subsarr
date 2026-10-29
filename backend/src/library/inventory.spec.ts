@@ -35,6 +35,9 @@ describe('persistent library inventory', () => {
   let config: ConfigService;
 
   beforeEach(async () => {
+    // These inventory tests use completed downloads; stability has its own
+    // controlled-clock regressions in library.service.spec.ts.
+    jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 60_000);
     temp = await mkdtemp(path.join(os.tmpdir(), 'subsarr-inventory-'));
     media = path.join(temp, 'media');
     await mkdir(media);

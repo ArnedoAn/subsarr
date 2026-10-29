@@ -1,16 +1,19 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { API_URL, ApiError, apiDownload, apiGet, apiPost } from '@/lib/api';
-import type { QuickBatchSnapshot, QuickTranslationOptions, SettingsPayload } from '@/lib/types';
+import type { QuickBatchSnapshot, QuickTranslationOptions, SettingsPayload, TranslationProvider } from '@/lib/types';
 import { LanguageCombobox } from '@/components/language-combobox';
 import { Button } from '@/components/ui/button';
 import { Dialog } from '@/components/ui/dialog';
 import { useToast } from '@/components/ui/toast';
+import { ProviderModelPicker, isTranslationProvider, savedProviderModel } from '@/components/provider-model-picker';
+import { INITIAL_QUALITY, TranslationQualityOptions } from '@/components/translation-quality-options';
+import { TranslationResultSummary } from '@/components/translation-result-summary';
 
 interface SelectedFile { id: string; file: File; error?: string }
 const MB = 1024 * 1024;
-const inputClass = 'w-full rounded-lg border border-outline-variant bg-surface-container px-3 py-2 text-on-surface';
 
 // getRandomValues also works on trusted-LAN HTTP, unlike randomUUID.
 function createQuickId() {
@@ -19,14 +22,19 @@ function createQuickId() {
 
 export default function QuickTranslatePage() {
   const toast = useToast();
+  const router = useRouter();
   const picker = useRef<HTMLInputElement>(null);
   const requestId = useRef<string | null>(null);
   const sending = useRef(false);
   const [selected, setSelected] = useState<SelectedFile[]>([]);
   const [source, setSource] = useState('eng');
   const [target, setTarget] = useState('spa');
-  const [provider, setProvider] = useState('');
+  const [provider, setProvider] = useState<TranslationProvider>('openrouter');
+  const [settings, setSettings] = useState<SettingsPayload | null>(null);
+  const [models, setModels] = useState<Partial<Record<TranslationProvider, string>>>({});
+  const model = models[provider] ?? (settings ? savedProviderModel(settings, provider) : '');
   const [verification, setVerification] = useState(true);
+  const [quality, setQuality] = useState(INITIAL_QUALITY);
   const [ready, setReady] = useState(false);
   const [settingsError, setSettingsError] = useState('');
   const [batch, setBatch] = useState<QuickBatchSnapshot | null>(null);
@@ -42,6 +50,8 @@ export default function QuickTranslatePage() {
   useEffect(() => {
     const controller = new AbortController();
     void apiGet<SettingsPayload>('/settings', { signal: controller.signal }).then((settings) => {
+      if (controller.signal.aborted) return;
+      setSettings(settings);
       let previous: Partial<QuickTranslationOptions> = {};
       if (requestId.current) {
         try { previous = JSON.parse(sessionStorage.getItem('subsarr.quick.options') || '{}') as Partial<QuickTranslationOptions>; }
@@ -49,8 +59,11 @@ export default function QuickTranslatePage() {
       }
       setSource(typeof previous.sourceLanguage === 'string' ? previous.sourceLanguage : settings.sourceLanguage || 'eng');
       setTarget(typeof previous.targetLanguage === 'string' ? previous.targetLanguage : settings.targetLanguage || 'spa');
-      setProvider(previous.provider === 'deepseek' || previous.provider === 'openrouter' ? previous.provider : '');
+      const restoredProvider = isTranslationProvider(previous.provider) ? previous.provider : settings.defaultProvider;
+      setProvider(restoredProvider);
+      if (typeof previous.model === 'string') setModels({ [restoredProvider]: previous.model });
       setVerification(typeof previous.verificationEnabled === 'boolean' ? previous.verificationEnabled : settings.translationVerificationEnabled); setReady(true);
+      setQuality({ qualityMode: previous.qualityMode === 'balanced' || previous.qualityMode === 'review' ? previous.qualityMode : 'fast', contextHint: typeof previous.contextHint === 'string' ? previous.contextHint : '', useTranslationMemory: previous.useTranslationMemory === true });
     }).catch((error: unknown) => { if (!controller.signal.aborted) setSettingsError(error instanceof Error ? error.message : 'Unable to load saved settings'); });
     setRestoreId(sessionStorage.getItem('subsarr.quick.batch'));
     requestId.current = sessionStorage.getItem('subsarr.quick.request');
@@ -141,12 +154,14 @@ export default function QuickTranslatePage() {
     sending.current = true; setBusy(true); setActionError('');
     const id = requestId.current ?? createQuickId(); requestId.current = id;
     sessionStorage.setItem('subsarr.quick.request', id);
-    sessionStorage.setItem('subsarr.quick.options', JSON.stringify({ sourceLanguage: source, targetLanguage: target, provider: provider || undefined, verificationEnabled: verification }));
+    sessionStorage.setItem('subsarr.quick.options', JSON.stringify({ sourceLanguage: source, targetLanguage: target, provider, model: model.trim() || undefined, ...quality, verificationEnabled: verification }));
     const body = new FormData();
     for (const entry of selected) body.append('files', entry.file);
     body.append('requestId', id); body.append('sourceLanguage', source); body.append('targetLanguage', target);
-    if (provider) body.append('provider', provider);
+    body.append('provider', provider);
+    if (model.trim()) body.append('model', model.trim());
     body.append('verificationEnabled', String(verification)); body.append('allowBudgetOverride', String(allowBudgetOverride));
+    body.append('qualityMode', quality.qualityMode); body.append('contextHint', quality.contextHint); body.append('useTranslationMemory', String(quality.useTranslationMemory));
     try { accept(await apiPost<QuickBatchSnapshot>('/quick-translate', body)); }
     catch (error) {
       if (error instanceof ApiError && error.status === 409) { setConfirmBudget('upload'); sessionStorage.removeItem('subsarr.quick.request'); }
@@ -175,6 +190,16 @@ export default function QuickTranslatePage() {
     finally { setBusy(false); }
   }
 
+  async function openInReview(fileId: string) {
+    if (!batch) return;
+    setBusy(true);
+    try {
+      const workspace = await apiPost<{ id: string; revision: number }>(`/quick-translate/${batch.id}/files/${fileId}/workspace`);
+      router.push(`/review?id=${encodeURIComponent(workspace.id)}`);
+    } catch (error) { toast.error(error instanceof Error ? error.message : 'Unable to open subtitle review'); }
+    finally { setBusy(false); }
+  }
+
   const totalBytes = selected.reduce((sum, entry) => sum + entry.file.size, 0);
   const invalid = selected.some((entry) => entry.error) || totalBytes > 20 * MB;
   const locked = busy || active || uncertain;
@@ -186,9 +211,10 @@ export default function QuickTranslatePage() {
     <section aria-label="Translation options" className="grid gap-4 rounded-lg bg-surface-container p-4 sm:grid-cols-2">
       <div><p id="quick-source-label" className="mb-2 text-sm">Source language</p><LanguageCombobox value={source} onChange={setSource} ariaLabel="Source language" disabled={locked || !ready} /></div>
       <div><p className="mb-2 text-sm">Target language</p><LanguageCombobox value={target} onChange={setTarget} ariaLabel="Target language" disabled={locked || !ready} /></div>
-      <label className="text-sm">Provider<select className={`${inputClass} mt-2`} value={provider} onChange={(event) => setProvider(event.target.value)} disabled={locked || !ready}><option value="">Saved provider preference</option><option value="deepseek">DeepSeek</option><option value="openrouter">OpenRouter</option></select></label>
+      <ProviderModelPicker provider={provider} model={model} onProviderChange={setProvider} onModelChange={value => setModels(previous => ({ ...previous, [provider]: value }))} disabled={locked || !ready} />
       <label className="flex items-center gap-3 text-sm"><input type="checkbox" checked={verification} disabled={locked || !ready} onChange={(event) => setVerification(event.target.checked)} />Verify translation quality</label>
-      <p className="text-xs text-on-surface-variant sm:col-span-2">Uses your saved models, glossary and API keys. Keys never leave the server. Provider usage, including verification and retries, counts toward your budget.</p>
+      <TranslationQualityOptions value={quality} onChange={setQuality} disabled={locked || !ready} />
+      <p className="text-xs text-on-surface-variant sm:col-span-2">Uses your selected model, saved glossary and API keys. Keys never leave the server. Pay-as-you-go providers count toward your paid budget; OpenCode Go usage consumes the subscription quota.</p>
     </section>
     <section className="space-y-4" aria-label="Upload subtitles">
       <div className="rounded-xl border-2 border-dashed border-outline-variant p-6 text-center">
@@ -203,7 +229,17 @@ export default function QuickTranslatePage() {
     {actionError && <p role="alert" className="rounded-lg bg-error-container p-4 text-sm text-error">{actionError}</p>}
     {batch && <section className="space-y-4" aria-label="Translation results"><div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-semibold">Files</h2><p className="text-xs text-on-surface-variant">{batch.expiresAt ? `Expires ${new Date(batch.expiresAt).toLocaleString()}` : 'Retained while queued or working; expires one hour after this batch finishes.'}</p></div><div className="flex flex-wrap gap-2"><Button disabled={busy} onClick={() => { void apiGet<QuickBatchSnapshot>(`/quick-translate/${batch.id}`).then(setBatch).catch((error: unknown) => setActionError(error instanceof Error ? error.message : 'Unable to refresh status')); }}>Refresh status</Button>{active && <Button variant="danger" disabled={busy} onClick={() => void action(`/quick-translate/${batch.id}/cancel`)}>Cancel all</Button>}{batch.files.some((file) => file.state === 'failed') && <Button disabled={busy} onClick={() => { if (batch.files.some((file) => file.errorCode === 'BUDGET_OVERRIDE_REQUIRED')) setConfirmBudget('retry'); else void action(`/quick-translate/${batch.id}/retry`, {}); }}>Retry failed only</Button>}<Button disabled={busy || !batch.files.some((file) => file.state === 'completed')} onClick={() => void download(`/quick-translate/${batch.id}/download`, 'subsarr-translations.zip')}>Download completed ZIP</Button></div></div>
       {active && <p className="text-xs text-on-surface-variant" role="status">{connection || 'Connecting to live updates…'}</p>}
-      <ul className="space-y-3">{batch.files.map((file) => <li key={file.id} className="space-y-2 rounded-lg bg-surface-container p-4"><div className="flex flex-wrap items-center justify-between gap-3"><div className="min-w-0"><h3 className="break-all text-sm font-semibold">{file.name}</h3><p className="text-xs text-on-surface-variant">{file.state} · {file.cueCount.toLocaleString()} cues</p></div>{(file.state === 'queued' || file.state === 'translating') && <Button size="sm" disabled={busy} aria-label={`Cancel ${file.name}`} onClick={() => void action(`/quick-translate/${batch.id}/files/${file.id}/cancel`)}>Cancel</Button>}{file.state === 'completed' && <Button size="sm" disabled={busy} aria-label={`Download ${file.downloadName}`} onClick={() => void download(`/quick-translate/${batch.id}/files/${file.id}/download`, file.downloadName)}>Download</Button>}</div><progress className="h-2 w-full accent-primary" value={file.progress} max={100} aria-label={`${file.name} translation progress`} /><p className="text-xs">{file.progress}%</p>{file.error && <p role="alert" className="break-words text-sm text-error">{file.error}</p>}{file.warnings.map((warning, index) => <p key={index} className="text-sm text-warning">{warning}</p>)}</li>)}</ul>
+      <ul className="space-y-3">{batch.files.map((file) => <li key={file.id} className="space-y-2 rounded-lg bg-surface-container p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3"><div className="min-w-0"><h3 className="break-all text-sm font-semibold">{file.name}</h3><p className="text-xs text-on-surface-variant">{file.state} · {file.cueCount.toLocaleString()} cues</p></div>
+          {(file.state === 'queued' || file.state === 'translating') && <Button size="sm" disabled={busy} aria-label={`Cancel ${file.name}`} onClick={() => void action(`/quick-translate/${batch.id}/files/${file.id}/cancel`)}>Cancel</Button>}
+          {file.state === 'completed' && <div className="flex flex-wrap gap-2"><Button size="sm" disabled={busy} aria-label={`Download ${file.downloadName}`} onClick={() => void download(`/quick-translate/${batch.id}/files/${file.id}/download`, file.downloadName)}>Download</Button><Button size="sm" disabled={busy} onClick={() => void openInReview(file.id)}>Open in review</Button></div>}
+        </div>
+        <progress className="h-2 w-full accent-primary" value={file.progress} max={100} aria-label={`${file.name} translation progress`} /><p className="text-xs">{file.progress}%</p>
+        {file.error && <p role="alert" className="break-words text-sm text-error">{file.error}</p>}{file.warnings.map((warning, index) => <p key={index} className="text-sm text-warning">{warning}</p>)}
+        {file.provider && <p className="break-all text-xs text-on-surface-variant">{file.provider === 'opencode-go' ? 'OpenCode Go' : file.provider} · {file.model}</p>}
+        {file.usage && <p className="text-xs text-on-surface-variant">{file.usage.totalTokens.toLocaleString()} tokens · {file.tierUsed === 'subscription' ? 'Subscription' : file.tierUsed}. {file.tierUsed === 'subscription' && 'Subscription fees and possible Console Extra Usage charges are not estimated.'}</p>}
+        <TranslationResultSummary result={file} />
+      </li>)}</ul>
     </section>}
     {dragging && !locked && <div className="pointer-events-none fixed inset-0 z-50 grid place-items-center border-4 border-primary bg-surface/95 p-8"><p className="text-center text-2xl font-bold">Drop SRT, ASS, SSA or VTT files to add them</p></div>}
     <Dialog open={confirmBudget !== null} onClose={() => setConfirmBudget(null)} title="Monthly translation budget reached"><p className="text-sm">Your configured monthly budget has been reached. Continue this manual translation anyway? This may incur additional provider charges.</p><div className="mt-5 flex justify-end gap-3"><Button onClick={() => setConfirmBudget(null)}>Cancel</Button><Button variant="danger" onClick={() => { const operation = confirmBudget; setConfirmBudget(null); if (operation === 'upload') void upload(true); else if (batch) void action(`/quick-translate/${batch.id}/retry`, { allowBudgetOverride: true }); }}>Confirm budget override</Button></div></Dialog>

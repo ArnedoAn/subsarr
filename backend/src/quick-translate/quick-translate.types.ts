@@ -14,6 +14,22 @@ export interface QuickFileSnapshot {
   error?: string;
   errorCode?: 'BUDGET_OVERRIDE_REQUIRED';
   warnings: string[];
+  qualityReport?: {
+    warningCount: number;
+    errorCount: number;
+    suspectCueIndices: number[];
+  };
+  checkpointReusedCues?: number;
+  memoryReusedCues?: number;
+  contextSheet?: string;
+  provider?: 'deepseek' | 'openrouter' | 'opencode-go';
+  model?: string;
+  tierUsed?: 'free' | 'paid' | 'subscription';
+  usage?: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  };
 }
 export interface QuickBatchSnapshot {
   id: string;
@@ -24,7 +40,11 @@ export interface QuickBatchSnapshot {
 export interface QuickTranslationOptions {
   sourceLanguage?: string;
   targetLanguage: string;
-  provider?: 'deepseek' | 'openrouter';
+  provider?: 'deepseek' | 'openrouter' | 'opencode-go';
+  model?: string;
+  qualityMode?: 'fast' | 'balanced' | 'review';
+  contextHint?: string;
+  useTranslationMemory?: boolean;
   verificationEnabled?: boolean;
   allowBudgetOverride?: boolean;
 }

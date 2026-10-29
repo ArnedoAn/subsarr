@@ -6,6 +6,7 @@ const PREFIX = 'enc:v1:';
 export const SECRET_FIELDS = [
   'openRouterApiKey',
   'deepSeekApiKey',
+  'opencodeGoApiKey',
   'telegramBotToken',
   'jellyfinApiKey',
   'tmdbApiKey',

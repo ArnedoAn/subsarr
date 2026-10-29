@@ -68,12 +68,21 @@ function fixture() {
   };
   const events = { publish: jest.fn(), complete: jest.fn() };
   const settings = {
-    getSettings: jest.fn().mockResolvedValue({}),
+    getSettings: jest.fn().mockResolvedValue({
+      defaultProvider: 'openrouter',
+      openRouterModel: 'openrouter/model',
+      deepSeekModel: 'deepseek-chat',
+      opencodeGoModel: 'glm-5.2',
+    }),
     assertTranslationBudget: jest.fn(),
   };
   const logs = {
     append: jest.fn(),
     getByJob: jest.fn<Promise<JobLogEntry[]>, [string]>().mockResolvedValue([]),
+  };
+  const profiles = { list: jest.fn().mockResolvedValue([]) };
+  const usage = {
+    getTodayTotals: jest.fn().mockResolvedValue({ free: 0, paid: 0 }),
   };
   const dependencies = [
     queue,
@@ -89,8 +98,8 @@ function fixture() {
     logs,
     archive,
     settings,
-    { getTodayTotals: jest.fn().mockResolvedValue({ free: 0, paid: 0 }) },
-    { list: jest.fn().mockResolvedValue([]) },
+    usage,
+    profiles,
     cancellation,
     events,
   ];
@@ -113,6 +122,8 @@ function fixture() {
     settings,
     dto,
     logs,
+    profiles,
+    usage,
   };
 }
 
@@ -140,6 +151,36 @@ describe('JobsService historical log reads', () => {
       legacy,
       canonical,
     ]);
+  });
+});
+
+describe('JobsService history date range', () => {
+  it('keeps only jobs finished inside the inclusive range, newest first', async () => {
+    const { service, queue, archive } = fixture();
+    Object.assign(queue, { getJobs: jest.fn().mockResolvedValue([]) });
+    const finished = (id: string, finishedAt: number) => ({
+      id,
+      state: 'completed',
+      data: { mediaItemId: 'media', mediaItemPath: `/media/${id}.mkv` },
+      createdAt: finishedAt - 60_000,
+      finishedAt,
+      progress: 100,
+      logs: [],
+    });
+    const start = Date.parse('2026-10-30T00:00:00.000Z');
+    archive.readSnapshots.mockResolvedValue([
+      finished('yesterday', start - 1),
+      finished('midnight', start),
+      finished('noon', start + 12 * 3_600_000),
+      finished('tomorrow', start + 24 * 3_600_000 + 1),
+    ]);
+    const page = await service.list({
+      state: 'completed',
+      from: '2026-10-30T00:00:00.000Z',
+      to: '2026-10-31T00:00:00.000Z',
+    });
+    expect(page.jobs.map((job) => job.id)).toEqual(['noon', 'midnight']);
+    expect(page.total).toBe(2);
   });
 });
 
@@ -293,10 +334,160 @@ describe('JobsService output claims and cooperative cancellation', () => {
       service.enqueue({ ...dto, allowBudgetOverride: true }),
     ).rejects.toThrow('Budget exceeded');
     expect(settings.assertTranslationBudget).toHaveBeenCalledWith({
-      provider: undefined,
+      provider: 'openrouter',
       automatic: false,
       allowBudgetOverride: true,
     });
     expect(queue.add).not.toHaveBeenCalled();
+  });
+});
+
+describe('JobsService provider and model snapshots', () => {
+  it('retains the resolved subscription snapshot on retry after defaults change', async () => {
+    const f = fixture();
+    f.settings.getSettings.mockResolvedValue({
+      defaultProvider: 'opencode-go',
+      opencodeGoModel: 'glm-5.2',
+      openRouterModel: 'router/model',
+      deepSeekModel: 'deepseek-chat',
+      dailyTokenLimitPaid: 0,
+      dailyTokenLimitFree: 0,
+    });
+    await f.service.enqueue(f.dto);
+    const original = f.queue.add.mock.calls[0][0];
+    expect(original).toEqual(
+      expect.objectContaining({
+        provider: 'opencode-go',
+        model: 'glm-5.2',
+        sessionId: expect.any(String) as unknown as string,
+      }),
+    );
+    expect(f.usage.getTodayTotals).not.toHaveBeenCalled();
+    const job = [...f.stored.values()][0];
+    job.getState.mockResolvedValue('failed');
+    f.archive.getSnapshot.mockResolvedValue({
+      state: 'failed',
+      data: original,
+    });
+    f.settings.getSettings.mockResolvedValue({
+      defaultProvider: 'deepseek',
+      deepSeekModel: 'deepseek-reasoner',
+      openRouterModel: 'router/new',
+    });
+    await f.service.retryFromArchive(job.id);
+    expect(f.queue.add.mock.calls[1][0]).toEqual(original);
+  });
+
+  it('respects profile selection and explicit operation provider precedence', async () => {
+    const f = fixture();
+    const profile = {
+      pathPrefix: '/media',
+      sourceLanguage: 'eng',
+      targetLanguage: 'spa',
+      provider: 'opencode-go',
+      model: 'glm-5.2',
+    };
+    f.profiles.list.mockResolvedValue([profile]);
+    await f.service.enqueue({
+      ...f.dto,
+      respectProfiles: true,
+      provider: 'deepseek',
+    });
+    expect(f.queue.add.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ provider: 'deepseek', model: 'deepseek-chat' }),
+    );
+    const g = fixture();
+    g.profiles.list.mockResolvedValue([profile]);
+    await g.service.enqueue({
+      ...g.dto,
+      respectProfiles: true,
+      triggeredBy: 'auto-scan',
+    });
+    expect(g.queue.add.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        provider: 'opencode-go',
+        model: 'glm-5.2',
+        automatic: true,
+      }),
+    );
+  });
+
+  it('forwards explicit batch model into queued snapshots', async () => {
+    const f = fixture();
+    await f.service.enqueueBatch({
+      items: [{ mediaItemId: 'media', sourceTrackIndex: 2 }],
+      sourceLanguage: 'eng',
+      targetLanguage: 'spa',
+      triggeredBy: 'batch',
+      forceBypassRules: false,
+      provider: 'opencode-go',
+      model: 'kimi-k2.7-code',
+    });
+    expect(f.queue.add.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        provider: 'opencode-go',
+        model: 'kimi-k2.7-code',
+      }),
+    );
+  });
+
+  it('rejects incompatible Go models before claiming an output', async () => {
+    const f = fixture();
+    await expect(
+      f.service.enqueue({ ...f.dto, provider: 'opencode-go', model: 'gpt-4o' }),
+    ).rejects.toThrow('documented OpenAI-compatible');
+    expect(f.queue.add).not.toHaveBeenCalled();
+    expect(f.queue.client.set).not.toHaveBeenCalled();
+  });
+
+  it('validates preview models against the matched profile provider', async () => {
+    const f = fixture();
+    f.profiles.list.mockResolvedValue([
+      {
+        pathPrefix: '/media',
+        sourceLanguage: 'eng',
+        targetLanguage: 'spa',
+        provider: 'opencode-go',
+        model: 'glm-5.2',
+      },
+    ]);
+    await expect(
+      f.service.previewBatch({
+        items: [{ mediaItemId: 'media' }],
+        sourceLanguage: 'eng',
+        targetLanguage: 'spa',
+        forceBypassRules: false,
+        model: 'gpt-4o',
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        status: 'error',
+        reason: expect.stringContaining(
+          'documented OpenAI-compatible',
+        ) as unknown as string,
+      }),
+    ]);
+    expect(f.queue.add).not.toHaveBeenCalled();
+  });
+
+  it('snapshots quality options in the batch payload', async () => {
+    const f = fixture();
+    await f.service.enqueueBatch({
+      items: [{ mediaItemId: 'media', sourceTrackIndex: 2 }],
+      sourceLanguage: 'eng',
+      targetLanguage: 'spa',
+      triggeredBy: 'batch',
+      forceBypassRules: false,
+      qualityMode: 'review',
+      contextHint: 'A comedy',
+      useTranslationMemory: true,
+    });
+    expect(f.queue.add.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        qualityMode: 'review',
+        contextHint: 'A comedy',
+        useTranslationMemory: true,
+      }),
+    );
   });
 });

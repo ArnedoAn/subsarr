@@ -4,9 +4,10 @@ import { TranslationModule } from '../translation/translation.module';
 import { QuickTranslateController } from './quick-translate.controller';
 import { QuickTranslateService } from './quick-translate.service';
 import { QuickUploadAdmission } from './quick-upload';
+import { WorkspaceModule } from '../translation-workspace/workspace.module';
 
 @Module({
-  imports: [SettingsModule, TranslationModule],
+  imports: [SettingsModule, TranslationModule, WorkspaceModule],
   controllers: [QuickTranslateController],
   providers: [QuickTranslateService, QuickUploadAdmission],
   exports: [QuickTranslateService],

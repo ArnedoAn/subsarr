@@ -4,7 +4,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { apiGet } from '@/lib/api';
 
 interface PathBrowserProps { value: string; onChange: (path: string) => void; placeholder?: string }
-interface FileSystemEntry { name: string; isDirectory: boolean; path: string }
+interface FileSystemEntry { name: string; isDirectory: boolean; path: string; available?: boolean; error?: string }
 
 export function PathBrowser({ value, onChange, placeholder = 'Enter a path or browse…' }: PathBrowserProps) {
   const [open, setOpen] = useState(false);
@@ -51,7 +51,7 @@ export function PathBrowser({ value, onChange, placeholder = 'Enter a path or br
         {loading && <p role="status" className="p-3 text-sm">Loading directories…</p>}
         {error && <div role="alert" className="p-3 text-sm text-error"><p>{error}</p><button type="button" className="btn btn-secondary mt-2" onClick={() => void load(path)}>Retry</button></div>}
         {!loading && !error && loaded && entries.filter(entry => entry.isDirectory).length === 0 && <p className="p-3 text-sm text-on-surface-variant">No subdirectories</p>}
-        {!loading && !error && entries.filter(entry => entry.isDirectory).map(entry => <button type="button" key={entry.path} className="flex w-full items-center gap-2 rounded p-3 text-left text-sm hover:bg-surface-container-highest" onClick={() => void load(entry.path)}><span aria-hidden="true">▸</span><span className="truncate">{entry.name}</span></button>)}
+        {!loading && !error && entries.filter(entry => entry.isDirectory).map(entry => <button type="button" key={entry.path} disabled={entry.available === false} title={entry.error} className="flex w-full items-center gap-2 rounded p-3 text-left text-sm hover:bg-surface-container-highest disabled:opacity-50" onClick={() => void load(entry.path)}><span aria-hidden="true">▸</span><span className="truncate">{entry.name}{entry.available === false ? ` — Unavailable${entry.error ? `: ${entry.error}` : ''}` : ''}</span></button>)}
       </div>
       <p className="border-t border-outline-variant/30 p-3 text-xs text-on-surface-variant">Manual paths are checked when saved. Browse only lists accessible configured media roots.</p>
     </div>}

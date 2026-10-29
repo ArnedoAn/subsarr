@@ -3,6 +3,7 @@ import {
   Logger,
   NotFoundException,
   type OnModuleInit,
+  type OnModuleDestroy,
   Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -36,6 +37,10 @@ import {
 import { type LibraryQueryDto } from './dto/library-query.dto';
 import { escapeLike } from '../common/search.utils';
 import type { LibraryScanMetrics, LibraryScanStatus } from '../contracts/api';
+import { DownloadStability, isPartialDownload } from './download-stability';
+import { LibraryWatcher } from './library-watcher';
+import { ScanHistoryService } from './scan-history.service';
+import type { LibraryScanFailure, LibraryScanRun } from './scan-history.types';
 export type { LibraryScanMetrics, LibraryScanStatus } from '../contracts/api';
 
 interface CachedLibrary {
@@ -82,7 +87,7 @@ class ProbeTimeoutError extends Error {
 }
 
 @Injectable()
-export class LibraryService implements OnModuleInit {
+export class LibraryService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(LibraryService.name);
   private cache: CachedLibrary | null = null;
   private scanPromise: Promise<MediaItem[]> | null = null;
@@ -91,6 +96,13 @@ export class LibraryService implements OnModuleInit {
   private pendingProbeWrites: ProbeCacheEntity[] | null = null;
   private probeWritePromise: Promise<void> | null = null;
   private readonly failedSidecarDirectories = new Set<string>();
+  private readonly stability = new DownloadStability(() => Date.now());
+  private readonly watcher: LibraryWatcher;
+  private readonly visitedDirectories = new Set<string>();
+  private failures: LibraryScanFailure[] = [];
+  private slowFiles: LibraryScanRun['slowFiles'] = [];
+  private destroyed = false;
+  private readonly removedDirectories = new Set<string>();
   private scanStatus: LibraryScanStatus = {
     state: 'idle',
     trigger: null,
@@ -111,7 +123,41 @@ export class LibraryService implements OnModuleInit {
     @Optional()
     @InjectRepository(MediaInventoryEntity)
     private readonly inventoryRepo?: Repository<MediaInventoryEntity>,
-  ) {}
+    @Optional() private readonly history?: ScanHistoryService,
+  ) {
+    this.watcher = new LibraryWatcher(
+      this.configService.get<SubsyncEnvConfig>('subsync')?.watchEnabled ??
+        false,
+      async (directories) => {
+        // Wait for any full or targeted run, including inventory persistence.
+        await this.waitForIdleScan();
+        if (this.destroyed) return;
+        const settings = await this.settingsService.getSettings();
+        if (this.destroyed) return;
+        await this.waitForIdleScan();
+        if (this.destroyed) return;
+        await this.startScan(
+          settings,
+          settings.scanCacheTtlMinutes * 60_000,
+          'cache-refresh',
+          directories,
+        );
+      },
+    );
+  }
+
+  private async waitForIdleScan(): Promise<void> {
+    while (this.scanPromise) await this.scanPromise.catch(() => undefined);
+  }
+
+  onModuleDestroy(): void {
+    this.destroyed = true;
+    this.watcher.close();
+  }
+
+  getWatchStatus() {
+    return this.watcher.status();
+  }
 
   async onModuleInit() {
     await this.restoreLibraryCacheFromDisk();
@@ -146,7 +192,7 @@ export class LibraryService implements OnModuleInit {
         parsed.items.every(
           (item) =>
             item != null &&
-            ['ok', 'failed', 'skipped'].includes(item.probeStatus),
+            ['ok', 'failed', 'skipped', 'pending'].includes(item.probeStatus),
         )
       ) {
         parsed.items = parsed.items.map((item) => ({
@@ -362,6 +408,7 @@ export class LibraryService implements OnModuleInit {
     settings: RuntimeSettings,
     ttlMs: number,
     trigger: LibraryScanStatus['trigger'],
+    directories?: string[],
   ): Promise<MediaItem[]> {
     const startedAt = Date.now();
     const metrics: LibraryScanMetrics = {
@@ -384,6 +431,7 @@ export class LibraryService implements OnModuleInit {
       itemFailures: 0,
       directoryErrors: 0,
       sidecarReadErrors: 0,
+      pendingFiles: 0,
       wallTimeMs: 0,
       discoveryWallTimeMs: 0,
       buildWallTimeMs: 0,
@@ -398,6 +446,10 @@ export class LibraryService implements OnModuleInit {
       roots: [],
     };
     this.probeDurations = [];
+    this.failures = [];
+    this.slowFiles = [];
+    if (!directories) this.visitedDirectories.clear();
+    this.removedDirectories.clear();
     this.scanStatus = {
       ...this.scanStatus,
       state: 'running',
@@ -413,7 +465,7 @@ export class LibraryService implements OnModuleInit {
       this.logScanEvent('scan_progress');
     }, 5000);
 
-    this.scanPromise = this.performScan(settings)
+    this.scanPromise = this.performScan(settings, directories)
       .then(async (items) => {
         const newCache: CachedLibrary = {
           items,
@@ -422,6 +474,8 @@ export class LibraryService implements OnModuleInit {
         await this.persistInventory(items);
         await this.persistLibraryCacheToDisk(newCache);
         this.cache = newCache;
+        this.stability.retain(new Set(items.map((item) => item.path)));
+        if (!directories) this.watcher.retain(this.visitedDirectories);
         const finishedAt = Date.now();
         metrics.wallTimeMs = finishedAt - startedAt;
         metrics.itemCount = items.length;
@@ -451,8 +505,29 @@ export class LibraryService implements OnModuleInit {
         this.logScanEvent('scan_failed', { error: message });
         throw error;
       })
-      .finally(() => {
+      .finally(async () => {
         clearInterval(progressTimer);
+        if (this.history) {
+          try {
+            await this.history.record({
+              id: metrics.scanId,
+              trigger,
+              state:
+                this.scanStatus.state === 'failed' ? 'failed' : 'completed',
+              startedAt,
+              finishedAt: this.scanStatus.finishedAt ?? Date.now(),
+              error: this.scanStatus.lastError,
+              metrics,
+              failures: this.failures,
+              slowFiles: this.slowFiles,
+              watcher: this.watcher.status(),
+            });
+          } catch (error) {
+            this.logger.error(
+              `Scan history persistence failed: ${String(error)}`,
+            );
+          }
+        }
         this.probeDurations = [];
         this.scanPromise = null;
       });
@@ -465,6 +540,20 @@ export class LibraryService implements OnModuleInit {
     details: Record<string, unknown> = {},
   ): void {
     const metrics = this.scanStatus.metrics;
+    if (
+      (event.endsWith('_failed') || event === 'cache_entry_invalid') &&
+      this.failures.length < 50
+    ) {
+      this.failures.push({
+        event,
+        ...(typeof details.path === 'string'
+          ? { path: details.path.slice(0, 4096) }
+          : {}),
+        ...(typeof details.error === 'string'
+          ? { error: details.error.slice(0, 4096) }
+          : {}),
+      });
+    }
     if (
       metrics &&
       (event === 'scan_progress' ||
@@ -496,12 +585,15 @@ export class LibraryService implements OnModuleInit {
     }
   }
 
-  private async performScan(settings: RuntimeSettings): Promise<MediaItem[]> {
+  private async performScan(
+    settings: RuntimeSettings,
+    directories?: string[],
+  ): Promise<MediaItem[]> {
     this.failedSidecarDirectories.clear();
     const discoveryStartedAt = Date.now();
     const allFiles: string[] = [];
     const metrics = this.scanStatus.metrics;
-    for (const mediaRoot of settings.mediaDirs) {
+    for (const mediaRoot of directories ?? settings.mediaDirs) {
       const rootStartedAt = Date.now();
       const previousErrors = metrics?.directoryErrors ?? 0;
       const previousDiscoveredFiles = metrics?.discoveredFiles ?? 0;
@@ -512,7 +604,22 @@ export class LibraryService implements OnModuleInit {
           const config = this.configService.get<SubsyncEnvConfig>('subsync');
           if (!config)
             throw new Error('Media root configuration is unavailable');
+          const rootStat = await fs
+            .lstat(mediaRoot)
+            .catch((error: NodeJS.ErrnoException) => {
+              if (directories && error.code === 'ENOENT') return null;
+              throw error;
+            });
+          if (!rootStat) {
+            this.removedDirectories.add(mediaRoot);
+            continue;
+          }
+          if (rootStat.isSymbolicLink()) {
+            if (directories) this.removedDirectories.add(mediaRoot);
+            continue;
+          }
           await assertWithinMediaRoots(mediaRoot, config.mediaDirs);
+          await assertWithinMediaRoots(mediaRoot, settings.mediaDirs);
         } catch (error) {
           if (metrics) metrics.directoryErrors++;
           throw new Error(
@@ -522,7 +629,8 @@ export class LibraryService implements OnModuleInit {
         files = await this.walkDirectory(
           mediaRoot,
           settings.pathContainsExclusions,
-          true,
+          !directories,
+          directories !== undefined,
         );
         allFiles.push(...files);
       } catch (error) {
@@ -587,6 +695,35 @@ export class LibraryService implements OnModuleInit {
       this.pendingProbeWrites = null;
     }
     if (metrics) metrics.buildWallTimeMs = Date.now() - buildStartedAt;
+    if (directories) {
+      const affected = new Set(
+        directories.map((directory) => path.resolve(directory)),
+      );
+      const discovered = new Set(allFiles);
+      items.push(
+        ...(this.cache?.items ?? []).filter(
+          (item) =>
+            !affected.has(path.dirname(item.path)) &&
+            !discovered.has(item.path) &&
+            ![...this.removedDirectories].some((directory) =>
+              item.path.startsWith(directory + path.sep),
+            ),
+        ),
+      );
+    }
+    if (directories && this.removedDirectories.size) {
+      for (const visited of this.visitedDirectories) {
+        if (
+          [...this.removedDirectories].some(
+            (directory) =>
+              visited === directory || visited.startsWith(directory + path.sep),
+          )
+        ) {
+          this.visitedDirectories.delete(visited);
+        }
+      }
+      this.watcher.retain(this.visitedDirectories);
+    }
     // Keep prior entries on partial reads: absence is only evidence after a full traversal.
     if (
       metrics &&
@@ -651,16 +788,32 @@ export class LibraryService implements OnModuleInit {
     root: string,
     exclusions: readonly string[],
     isConfiguredRoot = false,
+    targeted = false,
   ): Promise<string[]> {
     const result: string[] = [];
     if (this.isExcludedPath(root, exclusions)) {
       return result;
     }
 
+    if ((await fs.lstat(root).catch(() => null))?.isSymbolicLink())
+      return result;
     let entries: Dirent[] = [];
 
     try {
       entries = await fs.readdir(root, { withFileTypes: true });
+      this.visitedDirectories.add(root);
+      this.watcher.visit(root);
+      if (targeted) {
+        const children = new Set(
+          entries
+            .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
+            .map((entry) => path.join(root, entry.name)),
+        );
+        for (const visited of this.visitedDirectories) {
+          if (path.dirname(visited) !== root || children.has(visited)) continue;
+          this.removedDirectories.add(visited);
+        }
+      }
     } catch (error) {
       if (this.scanStatus.metrics) this.scanStatus.metrics.directoryErrors++;
       this.logScanEvent('directory_read_failed', {
@@ -675,16 +828,19 @@ export class LibraryService implements OnModuleInit {
 
     for (const entry of entries) {
       const fullPath = path.join(root, entry.name);
+      if (entry.isSymbolicLink() || isPartialDownload(entry.name)) continue;
       if (this.isExcludedPath(fullPath, exclusions)) {
         continue;
       }
       if (entry.isDirectory()) {
-        result.push(...(await this.walkDirectory(fullPath, exclusions)));
+        if (!targeted || !this.visitedDirectories.has(fullPath)) {
+          result.push(...(await this.walkDirectory(fullPath, exclusions)));
+        }
         continue;
       }
 
       const extension = path.extname(entry.name).toLowerCase();
-      if (MEDIA_EXTENSIONS.has(extension)) {
+      if (entry.isFile() && MEDIA_EXTENSIONS.has(extension)) {
         result.push(fullPath);
         if (this.scanStatus.metrics) this.scanStatus.metrics.discoveredFiles++;
       }
@@ -752,7 +908,11 @@ export class LibraryService implements OnModuleInit {
       stats.size > options.fileTooLargeBytes;
     let subtitleTracks: SubtitleTrack[];
     let probeStatus: ProbeStatus;
-    if (tooBig) {
+    if (this.stability.pending(filePath, stats.size, stats.mtimeMs)) {
+      subtitleTracks = [];
+      probeStatus = 'pending';
+      if (metrics) metrics.pendingFiles = (metrics.pendingFiles ?? 0) + 1;
+    } else if (tooBig) {
       subtitleTracks = [];
       probeStatus = 'skipped';
       if (metrics) metrics.skippedLargeFiles++;
@@ -863,6 +1023,9 @@ export class LibraryService implements OnModuleInit {
       const durationMs = Date.now() - probeStartedAt;
       if (metrics) metrics.probeDurationMs += durationMs;
       this.probeDurations.push(durationMs);
+      this.slowFiles.push({ path: filePath, durationMs });
+      this.slowFiles.sort((a, b) => b.durationMs - a.durationMs);
+      if (this.slowFiles.length > 20) this.slowFiles.length = 20;
     }
     const writeStartedAt = Date.now();
     try {

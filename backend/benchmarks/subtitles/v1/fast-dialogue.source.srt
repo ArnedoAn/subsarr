@@ -1,0 +1,8 @@
+1
+00:00:01,000 --> 00:00:02,000
+- Red wire?
+- No, the shy blue one!
+
+2
+00:00:04,000 --> 00:00:05,000
+Too late. The toaster is dancing.

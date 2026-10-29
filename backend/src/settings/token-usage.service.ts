@@ -4,25 +4,29 @@ import { Repository } from 'typeorm';
 import { type ProviderUsage } from '../translation/translation.service';
 import { SettingEntity } from '../database/entities/setting.entity';
 import { TokenUsageRowEntity } from '../database/entities/token-usage-row.entity';
+import type { TranslationBillingTier } from '../contracts/providers';
 import {
   type TierUsageSummary,
   type TokenUsageSummary,
 } from './dto/token-usage-summary.dto';
 import { estimateDeepSeekCostUsd } from './deepseek-pricing';
-import { isFreeOpenRouterModel } from './provider-pricing';
+import {
+  getProviderBillingTier,
+  SUBSCRIPTION_PRICING_SOURCE,
+} from './provider-pricing';
 
 @Injectable()
 export class TokenUsageService {
   private readonly logger = new Logger(TokenUsageService.name);
   private usageWrite: Promise<void> = Promise.resolve();
 
-  /** USD estimate for DeepSeek paid tier (cache-miss input pricing). Free tier → 0. */
+  /** Legacy paid estimate; free and subscription usage have no per-token charge. */
   static estimateCostUsd(
-    tier: 'free' | 'paid',
+    tier: TranslationBillingTier,
     promptTokens: number,
     completionTokens: number,
   ): number {
-    if (tier === 'free') return 0;
+    if (tier !== 'paid') return 0;
     return estimateDeepSeekCostUsd(promptTokens, completionTokens);
   }
 
@@ -35,19 +39,26 @@ export class TokenUsageService {
     return new Date().toISOString().slice(0, 10);
   }
 
-  async getTodayTotals(): Promise<{ free: number; paid: number }> {
+  async getTodayTotals(): Promise<{
+    free: number;
+    paid: number;
+    subscription: number;
+  }> {
     const date = this.todayUtc();
     const rows = await this.usageRepo.find({ where: { date } });
     let free = 0;
     let paid = 0;
+    let subscription = 0;
     for (const r of rows) {
       if (r.tier === 'free') {
         free += r.totalTokens;
       } else if (r.tier === 'paid') {
         paid += r.totalTokens;
+      } else if (r.tier === 'subscription') {
+        subscription += r.totalTokens;
       }
     }
-    return { free, paid };
+    return { free, paid, subscription };
   }
 
   /** Costs are recorded at response time using the then-configured pricing. */
@@ -73,8 +84,8 @@ export class TokenUsageService {
         throw new Error('Invalid provider token accounting');
     }
     if (
-      !['deepseek', 'openrouter'].includes(attempt.provider) ||
-      !['free', 'paid'].includes(attempt.tier)
+      !['deepseek', 'openrouter', 'opencode-go'].includes(attempt.provider) ||
+      !['free', 'paid', 'subscription'].includes(attempt.tier)
     )
       throw new Error('Invalid provider usage');
     if (
@@ -82,12 +93,11 @@ export class TokenUsageService {
       (!Number.isFinite(attempt.costUsd) || attempt.costUsd < 0)
     )
       throw new Error('Invalid provider response cost');
-    const tier =
-      attempt.provider === 'openrouter' &&
-      isFreeOpenRouterModel(attempt.model) &&
-      !(attempt.costUsd && attempt.costUsd > 0)
-        ? 'free'
-        : 'paid';
+    const tier = getProviderBillingTier(
+      attempt.provider,
+      attempt.model,
+      attempt.costUsd,
+    );
     const date = this.todayUtc();
     // The append-only response ledger and daily aggregate commit together. SQL
     // increments prevent concurrent HTTP responses losing each other's usage.
@@ -100,17 +110,21 @@ export class TokenUsageService {
         const miss = settings?.deepSeekInputCacheMissUsdPerMillion ?? 0.28;
         const output = settings?.deepSeekOutputUsdPerMillion ?? 0.42;
         const cost =
-          attempt.costUsd ??
-          (tier === 'free'
+          tier === 'subscription'
             ? 0
-            : (attempt.cacheHitTokens * hit +
-                attempt.cacheMissTokens * miss +
-                attempt.completionTokens * output) /
-              1_000_000);
+            : (attempt.costUsd ??
+              (tier === 'free'
+                ? 0
+                : (attempt.cacheHitTokens * hit +
+                    attempt.cacheMissTokens * miss +
+                    attempt.completionTokens * output) /
+                  1_000_000));
         const pricingSource =
-          attempt.costUsd !== undefined
-            ? `${attempt.provider} response usage.cost (actual USD)`
-            : `${settings?.pricingSource ?? 'https://api-docs.deepseek.com/quick_start/pricing'}${attempt.provider === 'openrouter' && tier === 'paid' ? ' (DeepSeek-rate estimate; OpenRouter response cost unavailable)' : ''}`;
+          tier === 'subscription'
+            ? SUBSCRIPTION_PRICING_SOURCE
+            : attempt.costUsd !== undefined
+              ? `${attempt.provider} response usage.cost (actual USD)`
+              : `${settings?.pricingSource ?? 'https://api-docs.deepseek.com/quick_start/pricing'}${attempt.provider === 'openrouter' && tier === 'paid' ? ' (DeepSeek-rate estimate; OpenRouter response cost unavailable)' : ''}`;
         await manager.query(
           `INSERT INTO provider_usage_attempts
         (createdAt,date,provider,model,tier,promptTokens,completionTokens,totalTokens,cacheHitTokens,cacheMissTokens,costUsd,pricingSource,pricingUpdatedAt)
@@ -128,7 +142,7 @@ export class TokenUsageService {
             attempt.cacheMissTokens,
             cost,
             pricingSource,
-            attempt.costUsd !== undefined
+            tier === 'subscription' || attempt.costUsd !== undefined
               ? date
               : (settings?.pricingUpdatedAt ?? '2025-09-05'),
           ],
@@ -160,6 +174,7 @@ export class TokenUsageService {
   private async getTodayTierTotals(): Promise<{
     free: TierUsageSummary;
     paid: TierUsageSummary;
+    subscription: TierUsageSummary;
   }> {
     const date = this.todayUtc();
     const rows = await this.usageRepo.find({ where: { date } });
@@ -170,6 +185,7 @@ export class TokenUsageService {
     };
     const free = { ...empty };
     const paid = { ...empty };
+    const subscription = { ...empty };
     for (const r of rows) {
       if (r.tier === 'free') {
         free.promptTokens += r.promptTokens;
@@ -179,14 +195,21 @@ export class TokenUsageService {
         paid.promptTokens += r.promptTokens;
         paid.completionTokens += r.completionTokens;
         paid.totalTokens += r.totalTokens;
+      } else if (r.tier === 'subscription') {
+        subscription.promptTokens += r.promptTokens;
+        subscription.completionTokens += r.completionTokens;
+        subscription.totalTokens += r.totalTokens;
       }
     }
-    return { free, paid };
+    return { free, paid, subscription };
   }
 
   async getSummary(): Promise<TokenUsageSummary> {
     const freeRows = await this.usageRepo.find({ where: { tier: 'free' } });
     const paidRows = await this.usageRepo.find({ where: { tier: 'paid' } });
+    const subscriptionRows = await this.usageRepo.find({
+      where: { tier: 'subscription' },
+    });
 
     const free = freeRows.reduce(
       (acc, r) => ({
@@ -206,15 +229,26 @@ export class TokenUsageService {
       { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
     );
 
+    const subscription = subscriptionRows.reduce(
+      (acc, r) => ({
+        promptTokens: acc.promptTokens + r.promptTokens,
+        completionTokens: acc.completionTokens + r.completionTokens,
+        totalTokens: acc.totalTokens + r.totalTokens,
+      }),
+      { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+    );
+
     const today = await this.getTodayTierTotals();
 
     return {
       free,
       paid,
+      subscription,
       estimatedCostUsd: paidRows.reduce((sum, row) => sum + row.costUsd, 0),
       today: {
         free: today.free,
         paid: today.paid,
+        subscription: today.subscription,
         estimatedCostUsd: [...freeRows, ...paidRows]
           .filter((row) => row.date === this.todayUtc())
           .reduce((sum, row) => sum + row.costUsd, 0),
@@ -225,7 +259,9 @@ export class TokenUsageService {
   /** Last N calendar days (UTC), excluding `legacy` import row. */
   async getDailyTokenSeries(
     lastDays: number,
-  ): Promise<Array<{ date: string; free: number; paid: number }>> {
+  ): Promise<
+    Array<{ date: string; free: number; paid: number; subscription: number }>
+  > {
     const end = new Date();
     const start = new Date(end);
     start.setUTCDate(start.getUTCDate() - (lastDays - 1));
@@ -236,23 +272,33 @@ export class TokenUsageService {
       .andWhere('u.date >= :from', { from })
       .getMany();
 
-    const byDate = new Map<string, { free: number; paid: number }>();
+    const byDate = new Map<
+      string,
+      { free: number; paid: number; subscription: number }
+    >();
     for (const r of rows) {
       if (!byDate.has(r.date)) {
-        byDate.set(r.date, { free: 0, paid: 0 });
+        byDate.set(r.date, { free: 0, paid: 0, subscription: 0 });
       }
       const b = byDate.get(r.date)!;
       if (r.tier === 'free') {
         b.free += r.totalTokens;
       } else if (r.tier === 'paid') {
         b.paid += r.totalTokens;
+      } else if (r.tier === 'subscription') {
+        b.subscription += r.totalTokens;
       }
     }
 
-    const out: Array<{ date: string; free: number; paid: number }> = [];
+    const out: Array<{
+      date: string;
+      free: number;
+      paid: number;
+      subscription: number;
+    }> = [];
     for (let d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
       const key = d.toISOString().slice(0, 10);
-      const v = byDate.get(key) ?? { free: 0, paid: 0 };
+      const v = byDate.get(key) ?? { free: 0, paid: 0, subscription: 0 };
       out.push({ date: key, ...v });
     }
     return out;

@@ -1,5 +1,8 @@
 /// <reference lib="es2024.promise" />
 jest.mock('franc-min', () => ({ franc: jest.fn(() => 'spa') }));
+jest.mock('../translation-workspace/workspace.service', () => ({
+  WorkspaceService: class {},
+}));
 
 import {
   BadRequestException,
@@ -13,6 +16,7 @@ import { SubtitleTranslationService } from '../translation/subtitle-translation.
 import { SettingsService } from '../settings/settings.service';
 import { TokenUsageService } from '../settings/token-usage.service';
 import { QUICK_LIMITS } from './quick-translate.internal';
+import { WorkspaceService } from '../translation-workspace/workspace.service';
 
 const flush = () => {
   const { promise, resolve } = Promise.withResolvers<void>();
@@ -29,7 +33,7 @@ const translated = {
   extension: 'srt' as const,
   cueCount: 1,
   warnings: [],
-  usage: {},
+  usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
   tierUsed: 'paid',
 };
 
@@ -41,15 +45,25 @@ function fixture() {
     translateDocument: jest.fn().mockResolvedValue(translated),
   };
   const settings = {
+    getSettings: jest.fn().mockResolvedValue({
+      defaultProvider: 'openrouter',
+      openRouterModel: 'openrouter/model',
+      deepSeekModel: 'deepseek-chat',
+      opencodeGoModel: 'glm-5.2',
+    }),
     assertTranslationBudget: jest.fn().mockResolvedValue(undefined),
   };
   const usage = { addProviderUsage: jest.fn().mockResolvedValue(undefined) };
+  const workspaces = {
+    create: jest.fn().mockResolvedValue({ id: 'workspace-1', revision: 1 }),
+  };
   const service = new QuickTranslateService(
     documents as unknown as SubtitleTranslationService,
     settings as unknown as SettingsService,
     usage as unknown as TokenUsageService,
+    workspaces as unknown as WorkspaceService,
   );
-  return { service, documents, settings, usage };
+  return { service, documents, settings, usage, workspaces };
 }
 
 describe('QuickTranslateService in-memory lifecycle', () => {
@@ -63,6 +77,172 @@ describe('QuickTranslateService in-memory lifecycle', () => {
     for (const service of services.splice(0)) service.onModuleDestroy();
     jest.useRealTimers();
     jest.restoreAllMocks();
+  });
+
+  it('freezes Go selection across retries and forwards subscription accounting', async () => {
+    const { service, documents, settings, usage } = setup();
+    settings.getSettings.mockResolvedValue({
+      defaultProvider: 'opencode-go',
+      opencodeGoModel: 'glm-5.2',
+      openRouterModel: 'router/model',
+      deepSeekModel: 'deepseek-chat',
+    });
+    documents.translateDocument.mockRejectedValueOnce(
+      new Error('OpenCode Go subscription quota exhausted'),
+    );
+    const batch = await service.create(
+      [input()],
+      { targetLanguage: 'spa' },
+      'request_go_snapshot_1',
+    );
+    settings.getSettings.mockResolvedValue({
+      defaultProvider: 'deepseek',
+      opencodeGoModel: 'kimi-k2.7-code',
+      deepSeekModel: 'deepseek-reasoner',
+      openRouterModel: 'router/model',
+    });
+    await flush();
+    expect(service.snapshot(batch.id).files[0].error).toContain(
+      'subscription quota',
+    );
+    const firstOptions = (
+      documents.translateDocument.mock.calls[0] as unknown[]
+    )[2];
+    expect(firstOptions).toEqual(
+      expect.objectContaining({
+        provider: 'opencode-go',
+        model: 'glm-5.2',
+        sessionId: batch.files[0].id,
+      }),
+    );
+    const attempt = {
+      provider: 'opencode-go',
+      model: 'glm-5.2',
+      tier: 'subscription',
+      promptTokens: 10,
+      completionTokens: 5,
+      totalTokens: 15,
+      cacheHitTokens: 0,
+      cacheMissTokens: 10,
+    };
+    documents.translateDocument.mockImplementationOnce(
+      async (
+        _input: unknown,
+        _name: unknown,
+        opts: { onUsage: (value: unknown) => Promise<void> },
+      ) => {
+        await opts.onUsage(attempt);
+        return { ...translated, tierUsed: 'subscription' };
+      },
+    );
+    await service.retry(batch.id);
+    await flush();
+    expect((documents.translateDocument.mock.calls[1] as unknown[])[2]).toEqual(
+      expect.objectContaining({
+        provider: 'opencode-go',
+        model: 'glm-5.2',
+        sessionId: batch.files[0].id,
+      }),
+    );
+    expect(usage.addProviderUsage).toHaveBeenCalledWith(attempt);
+    expect(service.snapshot(batch.id).files[0]).toMatchObject({
+      provider: 'opencode-go',
+      model: 'glm-5.2',
+      tierUsed: 'subscription',
+      usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+    });
+    expect(documents.translateDocument).toHaveBeenCalledTimes(2);
+  });
+
+  it('always uses ephemeral translation and bridges retained buffers through the controller until expiry', async () => {
+    const { service, documents, workspaces } = setup();
+    const upload = input();
+    const batch = await service.create(
+      [upload],
+      {
+        ...options,
+        sourceLanguage: 'eng',
+        qualityMode: 'review',
+        contextHint: 'A comedy',
+        useTranslationMemory: true,
+      },
+      'request_workspace_01',
+    );
+    const controller = new QuickTranslateController(service);
+    await expect(
+      controller.workspace(batch.id, batch.files[0].id),
+    ).rejects.toBeInstanceOf(ConflictException);
+    await flush();
+    expect(documents.translateDocument).toHaveBeenCalledWith(
+      upload.buffer,
+      upload.originalname,
+      expect.objectContaining({
+        persistence: 'ephemeral',
+        qualityMode: 'review',
+        contextHint: 'A comedy',
+        useTranslationMemory: true,
+      }),
+    );
+    await expect(
+      controller.workspace(batch.id, batch.files[0].id),
+    ).resolves.toEqual({ id: 'workspace-1', revision: 1 });
+    expect(workspaces.create).toHaveBeenCalledWith({
+      source: upload.buffer,
+      translated: Buffer.from(translated.content),
+      filename: upload.originalname,
+      sourceLang: 'eng',
+      targetLang: 'spa',
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+      contextHint: 'A comedy',
+    });
+    const expiresAt = service.snapshot(batch.id).expiresAt!;
+    service.expire(Date.parse(expiresAt));
+    await expect(
+      controller.workspace(batch.id, batch.files[0].id),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(workspaces.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects unsupported Go models before starting work', async () => {
+    const { service, documents } = setup();
+    await expect(
+      service.create(
+        [input()],
+        { targetLanguage: 'spa', provider: 'opencode-go', model: 'gpt-4o' },
+        'request_bad_model_01',
+      ),
+    ).rejects.toThrow('documented OpenAI-compatible');
+    expect(documents.translateDocument).not.toHaveBeenCalled();
+  });
+
+  it('keeps completed source buffers inside the global memory cap and releases them at expiry', async () => {
+    const { service } = setup();
+    const files = Array.from({ length: 10 }, () =>
+      input('episode.srt', QUICK_LIMITS.fileBytes),
+    );
+    const first = await service.create(files, options, 'request_retained_01');
+    const second = await service.create(files, options, 'request_retained_02');
+    await flush();
+    expect(
+      service
+        .snapshot(first.id)
+        .files.every((file) => file.state === 'completed'),
+    ).toBe(true);
+    expect(
+      service
+        .snapshot(second.id)
+        .files.every((file) => file.state === 'completed'),
+    ).toBe(true);
+    await expect(
+      service.create([input()], options, 'request_retained_03'),
+    ).rejects.toBeInstanceOf(ServiceUnavailableException);
+    service.expire(Date.parse(service.snapshot(first.id).expiresAt!));
+    await expect(
+      service.create([input()], options, 'request_retained_03'),
+    ).resolves.toMatchObject({
+      files: [expect.objectContaining({ state: 'queued' })],
+    });
   });
 
   it('returns queued IDs without waiting for translation and makes duplicate submissions idempotent', async () => {

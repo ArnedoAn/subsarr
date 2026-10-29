@@ -5,6 +5,8 @@ import { SettingEntity } from '../database/entities/setting.entity';
 import { InitialSchema1738700000000 } from '../migrations/1738700000000-InitialSchema';
 import { SettingsSecretsAndUsage1738700000005 } from '../migrations/1738700000005-SettingsSecretsAndUsage';
 import type { ProviderUsage } from '../translation/translation.service';
+import { AddOpenCodeGo1738700000007 } from '../migrations/1738700000007-AddOpenCodeGo';
+import { SUBSCRIPTION_PRICING_SOURCE } from './provider-pricing';
 
 const attempt: ProviderUsage = {
   provider: 'deepseek',
@@ -28,6 +30,7 @@ describe('TokenUsageService atomic response ledger', () => {
       migrations: [
         InitialSchema1738700000000,
         SettingsSecretsAndUsage1738700000005,
+        AddOpenCodeGo1738700000007,
       ],
       synchronize: false,
     });
@@ -45,7 +48,11 @@ describe('TokenUsageService atomic response ledger', () => {
     await Promise.all(
       Array.from({ length: 20 }, () => service.addProviderUsage(attempt)),
     );
-    expect(await service.getTodayTotals()).toEqual({ free: 0, paid: 24000 });
+    expect(await service.getTodayTotals()).toEqual({
+      free: 0,
+      paid: 24000,
+      subscription: 0,
+    });
     const row = await database
       .getRepository(TokenUsageRowEntity)
       .findOneByOrFail({ tier: 'paid' });
@@ -91,7 +98,11 @@ describe('TokenUsageService atomic response ledger', () => {
       model: 'openrouter/free',
       tier: 'free',
     });
-    expect(await service.getTodayTotals()).toEqual({ free: 1200, paid: 0 });
+    expect(await service.getTodayTotals()).toEqual({
+      free: 1200,
+      paid: 0,
+      subscription: 0,
+    });
     expect(
       (
         await database
@@ -146,6 +157,127 @@ describe('TokenUsageService atomic response ledger', () => {
       row.costUsd + 0.01,
       12,
     );
+  });
+
+  it('records Go subscription tokens and cache metadata without converting quota cost into USD', async () => {
+    await service.addProviderUsage({
+      ...attempt,
+      provider: 'opencode-go',
+      model: 'glm-5.2',
+      tier: 'subscription',
+      costUsd: 42.75,
+    });
+    await service.addProviderUsage({
+      ...attempt,
+      provider: 'opencode-go',
+      model: 'kimi-k3',
+      tier: 'subscription',
+    });
+    const row = await database
+      .getRepository(TokenUsageRowEntity)
+      .findOneByOrFail({ tier: 'subscription' });
+    expect(row).toMatchObject({
+      promptTokens: 2000,
+      completionTokens: 400,
+      totalTokens: 2400,
+      cacheHitTokens: 1600,
+      cacheMissTokens: 400,
+      costUsd: 0,
+    });
+    const ledger = await database.query<Array<Record<string, unknown>>>(
+      'SELECT * FROM provider_usage_attempts ORDER BY id',
+    );
+    expect(ledger).toHaveLength(2);
+    for (const entry of ledger) {
+      expect(entry).toMatchObject({
+        provider: 'opencode-go',
+        tier: 'subscription',
+        promptTokens: 1000,
+        completionTokens: 200,
+        totalTokens: 1200,
+        cacheHitTokens: 800,
+        cacheMissTokens: 200,
+        costUsd: 0,
+        pricingSource: SUBSCRIPTION_PRICING_SOURCE,
+        pricingUpdatedAt: new Date().toISOString().slice(0, 10),
+      });
+      expect(String(entry.pricingSource)).not.toContain('DeepSeek');
+    }
+    expect(ledger.map((entry) => entry.model)).toEqual(['glm-5.2', 'kimi-k3']);
+    expect(await service.getTodayTotals()).toEqual({
+      free: 0,
+      paid: 0,
+      subscription: 2400,
+    });
+    expect(await service.getMonthPaidCostEstimateUsd()).toBe(0);
+    expect(TokenUsageService.estimateCostUsd('subscription', 1e6, 1e6)).toBe(0);
+  });
+
+  it('aggregates subscription history separately and leaves paid and free rows and budgets unchanged', async () => {
+    await service.addProviderUsage({ ...attempt, costUsd: 0.25 });
+    await service.addProviderUsage({
+      ...attempt,
+      provider: 'openrouter',
+      model: 'openrouter/free',
+      tier: 'free',
+    });
+    const repository = database.getRepository(TokenUsageRowEntity);
+    const previous = await repository.find({ order: { id: 'ASC' } });
+    await repository.save(
+      repository.create({
+        tier: 'subscription',
+        date: '2000-01-01',
+        promptTokens: 50,
+        completionTokens: 10,
+        totalTokens: 60,
+        cacheHitTokens: 0,
+        cacheMissTokens: 50,
+        costUsd: 0,
+      }),
+    );
+    await service.addProviderUsage({
+      ...attempt,
+      provider: 'opencode-go',
+      model: 'glm-5.2',
+      tier: 'subscription',
+      costUsd: 500,
+    });
+    expect(
+      await repository.find({
+        where: [{ tier: 'free' }, { tier: 'paid' }],
+        order: { id: 'ASC' },
+      }),
+    ).toEqual(previous);
+    const paidAndFree = {
+      promptTokens: 1000,
+      completionTokens: 200,
+      totalTokens: 1200,
+    };
+    expect(await service.getSummary()).toEqual({
+      free: paidAndFree,
+      paid: paidAndFree,
+      subscription: {
+        promptTokens: 1050,
+        completionTokens: 210,
+        totalTokens: 1260,
+      },
+      estimatedCostUsd: 0.25,
+      today: {
+        free: paidAndFree,
+        paid: paidAndFree,
+        subscription: paidAndFree,
+        estimatedCostUsd: 0.25,
+      },
+    });
+    expect(await service.getMonthPaidCostEstimateUsd()).toBe(0.25);
+    expect(await service.getDailyTokenSeries(1)).toEqual([
+      {
+        date: new Date().toISOString().slice(0, 10),
+        free: 1200,
+        paid: 1200,
+        subscription: 1200,
+      },
+    ]);
   });
 
   it('rejects invalid provider token counts before accounting writes', async () => {

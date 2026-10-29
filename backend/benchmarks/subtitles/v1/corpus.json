@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 1,
+  "version": "1.0.0",
+  "authorship": "Original synthetic fragments authored for Subsarr; no media transcription or copyrighted bulk source.",
+  "sourceLanguage": "en",
+  "targetLanguage": "es",
+  "limitations": "References illustrate acceptable choices, not unique correct translations. Automated checks do not establish linguistic accuracy.",
+  "rubric": [
+    {
+      "dimension": "fidelity",
+      "scale": "0-4",
+      "anchors": "0 contradicts/omits; 2 partly faithful; 4 preserves meaning and intent"
+    },
+    {
+      "dimension": "naturalness",
+      "scale": "0-4",
+      "anchors": "0 unintelligible; 2 awkward but understandable; 4 idiomatic dialogue"
+    },
+    {
+      "dimension": "voice",
+      "scale": "0-4",
+      "anchors": "0 loses scene/register; 2 mixed tone; 4 preserves speaker identity and register"
+    },
+    {
+      "dimension": "humor",
+      "scale": "0-4 or not applicable",
+      "anchors": "0 loses intended joke; 2 conveys setup only; 4 preserves comic intent; mark not applicable for non-comic cues"
+    },
+    {
+      "dimension": "consistency",
+      "scale": "0-4",
+      "anchors": "0 contradicts names/terms/register; 2 inconsistent choices; 4 maintains terminology and characterization throughout"
+    }
+  ],
+  "cases": [
+    {
+      "id": "humor",
+      "category": "humor",
+      "format": "srt",
+      "source": "humor.source.srt",
+      "reference": "humor.reference.srt",
+      "expectedTerms": [
+        "robot",
+        "descafeinado"
+      ],
+      "notes": "Preserve the machine/coffee double meaning; alternate natural punchlines are acceptable."
+    },
+    {
+      "id": "idioms",
+      "category": "idioms",
+      "format": "vtt",
+      "source": "idioms.source.vtt",
+      "reference": "idioms.reference.vtt",
+      "expectedTerms": [
+        "calma",
+        "puente"
+      ],
+      "notes": "Avoid a literal temperature instruction; assess idiomatic naturalness manually."
+    },
+    {
+      "id": "fast-dialogue",
+      "category": "fast dialogue",
+      "format": "srt",
+      "source": "fast-dialogue.source.srt",
+      "reference": "fast-dialogue.reference.srt",
+      "expectedTerms": [
+        "azul",
+        "tostadora"
+      ],
+      "notes": "Retain speaker turns and urgency; readability warnings intentionally stress short timings."
+    },
+    {
+      "id": "anime",
+      "category": "anime",
+      "format": "ass",
+      "source": "anime.source.ass",
+      "reference": "anime.reference.ass",
+      "expectedTerms": [
+        "zorro",
+        "entrenamiento"
+      ],
+      "notes": "Invented fantasy scene; preserve emphasis tags and heroic/comic register without adding honorifics."
+    },
+    {
+      "id": "songs",
+      "category": "songs",
+      "format": "vtt",
+      "source": "songs.source.vtt",
+      "reference": "songs.reference.vtt",
+      "expectedTerms": [
+        "papel",
+        "plata"
+      ],
+      "notes": "Original lyrics. Human review weighs imagery and singability separately; rhyme is not mechanically scored."
+    },
+    {
+      "id": "terminology",
+      "category": "terminology",
+      "format": "ass",
+      "source": "terminology.source.ass",
+      "reference": "terminology.reference.ass",
+      "expectedTerms": [
+        "portal de fase",
+        "llave de flujo"
+      ],
+      "notes": "Expected project glossary terms must be consistent across cues; do not translate them independently."
+    }
+  ]
+}

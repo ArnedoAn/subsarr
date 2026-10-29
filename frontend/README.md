@@ -10,17 +10,36 @@ por dispositivo o al abrir la página.
   serie/temporada, películas y sin clasificar. Selección completa de grupos o
   coincidencias mediante IDs, no limitada a la página cargada. Panel de detalle
   reutilizado por `/library/[id]`, con pistas, sidecars, reglas e historial.
+  Archivos en descarga se muestran como pendientes y no se pueden encolar. Bajo el
+  panel de escaneo, historial y diagnósticos: fases, caché, errores, archivos
+  lentos, exportación redactada y estado del watcher.
 - **Actividad** `/activity`: Cola, Historial y Logs. Reemplaza `/jobs` y `/archive`.
   Estados desconectados/desactualizados no se presentan como una cola sana vacía.
+  Los resultados muestran legibilidad, reutilización de checkpoint/memoria y enlace
+  a revisión. Historial y Logs filtran por fecha/hora de finalización (desde/hasta,
+  hora local) con atajos Última hora, Hoy y Últimos 7 días.
 - **Traducción rápida** `/quick-translate`: arrastrar o elegir varios SRT, ASS/SSA
   y VTT, progreso/cancelación por archivo, descarga individual o ZIP. Sin relación
   con biblioteca o jobs; sesiones en memoria y retención de una hora al terminar.
+  Muestra proveedor, modelo, tokens/tier reales y "Abrir en revisión".
+- **Revisión** `/review`: subir fuente y traducción opcional, o abrir desde
+  `?id=` (traducción rápida) o `?mediaId=` (sidecar de biblioteca). Comparación por
+  cue paginada con avisos de legibilidad, edición con control de revisión (409 →
+  recarga), retraducción asíncrona cancelable, hoja de contexto, aprobación explícita
+  a memoria y su gestión, descarga y guardado explícito en biblioteca.
 - **Resumen** `/dashboard`: estado accionable, uso/presupuesto, métricas y gráficos.
 - **Renombrar** `/rename`: preview/diff editable, clasificación/metadatos, sidecars,
   conflictos, ejecución y deshacer. Acceso secundario desde Herramientas/Más.
 - **Ajustes** `/settings`: Proveedores, Idiomas y calidad, Biblioteca y escaneo,
   Automatización, Integraciones y Avanzado. La barra de guardado conserva borradores
   aunque fallen consultas auxiliares; los avisos de secretos permiten repararlos.
+  Proveedores incluye OpenCode Go (key cifrada, modelo compatible, uso de
+  suscripción) y el proveedor/modelo predeterminado. Automatización edita perfiles
+  con proveedor/modelo propios. Avanzado muestra el preflight del sistema.
+
+Lote, detalle y traducción rápida comparten el selector de proveedor/modelo (inicia
+en el predeterminado del servidor) y las opciones de calidad: rápido, equilibrado o
+revisión, contexto opcional y memoria aprobada; equilibrado/revisión añaden consumo.
 
 `Ctrl+K` / `Cmd+K` abre comandos. En móvil hay cuatro destinos principales y Más;
 los diálogos mantienen el foco y Escape lo devuelve al control que los abrió.
@@ -75,7 +94,7 @@ No se añadió un framework de tests frontend. Regresiones de lógica pura usan
 Node 24 y su runner nativo:
 
 ```sh
-node --test app/settings/settings-validation.test.mjs components/library/library-filters.test.mjs
+node --test app/settings/settings-validation.test.mjs components/library/library-filters.test.mjs lib/review-workspace.test.mjs lib/diagnostics.test.mjs
 ```
 
 Además de lint/typecheck/build, verificar visualmente a 390 y 1440 px: nombres

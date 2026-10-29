@@ -70,6 +70,9 @@ describe('LibraryScanSchedulerService', () => {
       deepSeekApiKey: '',
       openRouterModel: '',
       deepSeekModel: '',
+      opencodeGoApiKey: '',
+      opencodeGoModel: 'glm-5.2',
+      defaultProvider: 'openrouter',
       scanCacheTtlMinutes: 5,
       concurrency: 2,
       pathContainsExclusions: [],
@@ -99,27 +102,30 @@ describe('LibraryScanSchedulerService', () => {
     );
   });
 
-  it('keeps a failed discovery pending when its probe is temporarily size-skipped', async () => {
-    const failed = media('pending', 'failed');
-    libraryService.getLibrary.mockResolvedValue([failed]);
-    await service.runScheduledScan();
+  it.each(['failed', 'pending'] as const)(
+    'keeps a %s discovery pending until stable and successfully probed',
+    async (status) => {
+      const failed = media('pending', status);
+      libraryService.getLibrary.mockResolvedValue([failed]);
+      await service.runScheduledScan();
 
-    const skipped = media('pending', 'skipped');
-    libraryService.getCachedItems.mockReturnValue([failed]);
-    libraryService.getLibrary.mockResolvedValue([skipped]);
-    await service.runScheduledScan();
-    expect(jobsService.enqueue).not.toHaveBeenCalled();
+      const skipped = media('pending', 'skipped');
+      libraryService.getCachedItems.mockReturnValue([failed]);
+      libraryService.getLibrary.mockResolvedValue([skipped]);
+      await service.runScheduledScan();
+      expect(jobsService.enqueue).not.toHaveBeenCalled();
 
-    const recovered = media('pending', 'ok');
-    libraryService.getCachedItems.mockReturnValue([skipped]);
-    libraryService.getLibrary.mockResolvedValue([recovered]);
-    await service.runScheduledScan();
-    await service.runScheduledScan();
-    expect(jobsService.enqueue).toHaveBeenCalledTimes(1);
-    expect(jobsService.enqueue).toHaveBeenCalledWith(
-      expect.objectContaining({ mediaItemId: 'pending' }),
-    );
-  });
+      const recovered = media('pending', 'ok');
+      libraryService.getCachedItems.mockReturnValue([skipped]);
+      libraryService.getLibrary.mockResolvedValue([recovered]);
+      await service.runScheduledScan();
+      await service.runScheduledScan();
+      expect(jobsService.enqueue).toHaveBeenCalledTimes(1);
+      expect(jobsService.enqueue).toHaveBeenCalledWith(
+        expect.objectContaining({ mediaItemId: 'pending' }),
+      );
+    },
+  );
 
   afterEach(() => {
     jest.restoreAllMocks();
@@ -539,31 +545,34 @@ describe('LibraryScanSchedulerService', () => {
       });
     });
 
-    it('preserves failed discoveries through restarts, disappearance, skips and interactive repair', async () => {
-      const durable = durableScheduler();
-      libraryService.getLibrary.mockResolvedValue([media('pending', 'failed')]);
-      await durable.restart().runScheduledScan();
-      expect(durable.checkpoint()?.pendingProbeItemIds).toEqual(['pending']);
+    it.each(['failed', 'pending'] as const)(
+      'preserves %s discoveries through restarts, disappearance, skips and repair',
+      async (status) => {
+        const durable = durableScheduler();
+        libraryService.getLibrary.mockResolvedValue([media('pending', status)]);
+        await durable.restart().runScheduledScan();
+        expect(durable.checkpoint()?.pendingProbeItemIds).toEqual(['pending']);
 
-      libraryService.getCachedItems.mockReturnValue([]);
-      libraryService.getLibrary.mockResolvedValue([]);
-      await durable.restart().runScheduledScan();
-      libraryService.getLibrary.mockResolvedValue([
-        media('pending', 'skipped'),
-      ]);
-      await durable.restart().runScheduledScan();
-      expect(durable.checkpoint()?.pendingProbeItemIds).toEqual(['pending']);
-      expect(jobsService.enqueue).not.toHaveBeenCalled();
+        libraryService.getCachedItems.mockReturnValue([]);
+        libraryService.getLibrary.mockResolvedValue([]);
+        await durable.restart().runScheduledScan();
+        libraryService.getLibrary.mockResolvedValue([
+          media('pending', 'skipped'),
+        ]);
+        await durable.restart().runScheduledScan();
+        expect(durable.checkpoint()?.pendingProbeItemIds).toEqual(['pending']);
+        expect(jobsService.enqueue).not.toHaveBeenCalled();
 
-      const repaired = media('pending', 'ok');
-      libraryService.getCachedItems.mockReturnValue([repaired]);
-      libraryService.getLibrary.mockResolvedValue([repaired]);
-      await durable.restart().runScheduledScan();
-      await durable.restart().runScheduledScan();
-      expect(jobsService.enqueue).toHaveBeenCalledTimes(1);
-      expect(durable.checkpoint()?.pendingProbeItemIds).toEqual([]);
-      expect(durable.checkpoint()?.knownItemIds).toEqual(['pending']);
-    });
+        const repaired = media('pending', 'ok');
+        libraryService.getCachedItems.mockReturnValue([repaired]);
+        libraryService.getLibrary.mockResolvedValue([repaired]);
+        await durable.restart().runScheduledScan();
+        await durable.restart().runScheduledScan();
+        expect(jobsService.enqueue).toHaveBeenCalledTimes(1);
+        expect(durable.checkpoint()?.pendingProbeItemIds).toEqual([]);
+        expect(durable.checkpoint()?.knownItemIds).toEqual(['pending']);
+      },
+    );
 
     it('keeps previously healthy IDs known after disappearance, failure, restart and repair', async () => {
       const durable = durableScheduler();

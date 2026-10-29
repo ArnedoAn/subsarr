@@ -33,9 +33,9 @@ export class QuickTranslateController {
       limits: {
         fileSize: QUICK_LIMITS.fileBytes,
         files: QUICK_LIMITS.files,
-        fields: 7,
-        fieldSize: 256,
-        parts: 27,
+        fields: 10,
+        fieldSize: 48_000,
+        parts: 30,
       },
     }),
   )
@@ -69,6 +69,11 @@ export class QuickTranslateController {
     @Body() dto: QuickRetryDto,
   ) {
     return this.quick.retry(id, dto.allowBudgetOverride);
+  }
+
+  @Post(':id/files/:fileId/workspace')
+  workspace(@Param('id') id: string, @Param('fileId') fileId: string) {
+    return this.quick.createWorkspace(id, fileId);
   }
 
   @Sse(':id/events')

@@ -1,4 +1,8 @@
 import type { SubtitleOutputExtension } from '../translation/subtitle-format';
+import type {
+  TranslationProvider,
+  TranslationBillingTier,
+} from '../contracts/providers';
 
 export type JobPhase =
   | 'waiting'
@@ -27,7 +31,12 @@ export interface TranslationJobPayload {
   batchGroupId?: string;
   triggeredBy: 'manual' | 'batch' | 'auto-scan';
   forceBypassRules?: boolean;
-  provider?: 'openrouter' | 'deepseek';
+  provider?: TranslationProvider;
+  model?: string;
+  sessionId?: string;
+  qualityMode?: 'fast' | 'balanced' | 'review';
+  contextHint?: string;
+  useTranslationMemory?: boolean;
   allowBudgetOverride?: boolean;
   automatic?: boolean;
 }
@@ -56,11 +65,23 @@ export interface JobProgressStreamEvent extends JobProgressEvent {
 
 export interface JobReturnValue {
   outputPath: string;
-  tierUsed: 'free' | 'paid';
+  tierUsed: TranslationBillingTier;
   usage: {
     promptTokens: number;
     completionTokens: number;
     totalTokens: number;
   };
   lineCount: number;
+  provider?: TranslationProvider;
+  model?: string;
+  qualityReport?: {
+    warningCount: number;
+    errorCount: number;
+    suspectCueIndices: number[];
+  };
+  checkpointKey?: string;
+  checkpointReusedCues?: number;
+  memoryReusedCues?: number;
+  contextSheet?: string;
+  workspace?: { mediaItemId: string; subtitlePath: string };
 }

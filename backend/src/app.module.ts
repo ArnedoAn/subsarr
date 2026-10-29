@@ -20,6 +20,8 @@ import { GlossaryModule } from './glossary/glossary.module';
 import { IntegrationsModule } from './integrations/integrations.module';
 import { RenameModule } from './rename/rename.module';
 import { QuickTranslateModule } from './quick-translate/quick-translate.module';
+import { EvaluationModule } from './evaluation/evaluation.module';
+import { WorkspaceModule } from './translation-workspace/workspace.module';
 
 @Module({
   imports: [
@@ -65,6 +67,8 @@ import { QuickTranslateModule } from './quick-translate/quick-translate.module';
     IntegrationsModule,
     RenameModule,
     QuickTranslateModule,
+    EvaluationModule,
+    WorkspaceModule,
   ],
   controllers: [AppController],
   providers: [AppService],

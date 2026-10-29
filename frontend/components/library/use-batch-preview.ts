@@ -1,8 +1,8 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import { apiPost } from '@/lib/api';
-import type { BatchPreviewRow } from '@/lib/types';
-export type BatchOptions = { sourceLanguage: string; targetLanguage: string; provider: 'openrouter' | 'deepseek'; forceBypassRules: boolean; targetConflictResolution?: 'replace' | 'alternate' };
+import type { BatchPreviewRow, TranslationProvider, TranslationQualityMode } from '@/lib/types';
+export type BatchOptions = { sourceLanguage: string; targetLanguage: string; provider: TranslationProvider; model?: string; qualityMode?: TranslationQualityMode; contextHint?: string; useTranslationMemory?: boolean; forceBypassRules: boolean; targetConflictResolution?: 'replace' | 'alternate' };
 export function useBatchPreview(open: boolean, ids: string[], options: BatchOptions) {
   const [rows, setRows] = useState<BatchPreviewRow[]>([]);
   const [error, setError] = useState<string | null>(null);

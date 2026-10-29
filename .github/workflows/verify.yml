@@ -1,0 +1,73 @@
+name: Verify
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      REDIS_URL: redis://127.0.0.1:6379/15
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.5.1
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: |
+            backend/pnpm-lock.yaml
+            frontend/pnpm-lock.yaml
+      - name: Install backend
+        working-directory: backend
+        run: pnpm install --frozen-lockfile
+      - name: Install frontend
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+      - name: Check committed API contracts
+        run: node scripts/generate-contracts.cjs --check
+      - name: Lint backend
+        working-directory: backend
+        run: pnpm run lint
+      - name: Lint frontend
+        working-directory: frontend
+        run: pnpm run lint
+      - name: Typecheck backend
+        working-directory: backend
+        run: pnpm run typecheck
+      - name: Typecheck frontend
+        working-directory: frontend
+        run: pnpm run typecheck
+      - name: Backend unit tests
+        working-directory: backend
+        run: pnpm run test -- --runInBand
+      - name: Frontend unit tests
+        working-directory: frontend
+        run: node --test
+      - name: Build backend
+        working-directory: backend
+        run: pnpm run build
+      - name: Build frontend
+        working-directory: frontend
+        run: pnpm run build
+      - name: Check oldest-schema upgrade and repeat boot
+        run: node scripts/check-upgrade.cjs

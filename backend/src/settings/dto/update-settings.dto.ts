@@ -11,16 +11,18 @@ import {
   Max,
   ArrayMaxSize,
   MaxLength,
+  Matches,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { RuleToggleDto } from './rule-toggle.dto';
 import { SECRET_FIELDS, type SecretField } from '../secret-store';
+import type { TranslationProvider } from '../../contracts/providers';
 
 export class UpdateSettingsDto {
   @IsOptional()
   @IsArray()
-  @ArrayMaxSize(5)
+  @ArrayMaxSize(SECRET_FIELDS.length)
   @IsIn(SECRET_FIELDS, { each: true })
   clearSecrets?: SecretField[];
 
@@ -46,11 +48,30 @@ export class UpdateSettingsDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(128)
+  @Matches(/^[a-zA-Z0-9][a-zA-Z0-9._:/+@-]*$/)
   openRouterModel?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(128)
+  @Matches(/^[a-zA-Z0-9][a-zA-Z0-9._:/+@-]*$/)
   deepSeekModel?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(4096)
+  opencodeGoApiKey?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  @Matches(/^[a-zA-Z0-9][a-zA-Z0-9._:/+@-]*$/)
+  opencodeGoModel?: string;
+
+  @IsOptional()
+  @IsIn(['openrouter', 'deepseek', 'opencode-go'])
+  defaultProvider?: TranslationProvider;
 
   @Type(() => Number)
   @IsInt()

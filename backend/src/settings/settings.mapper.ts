@@ -12,6 +12,9 @@ export function entityToRuntime(e: SettingEntity): RuntimeSettings {
     deepSeekApiKey: e.deepSeekApiKey,
     openRouterModel: e.openRouterModel,
     deepSeekModel: e.deepSeekModel,
+    opencodeGoApiKey: e.opencodeGoApiKeyEncrypted ?? '',
+    opencodeGoModel: e.opencodeGoModel ?? 'glm-5.2',
+    defaultProvider: e.defaultProvider ?? 'openrouter',
     scanCacheTtlMinutes: e.scanCacheTtlMinutes,
     concurrency: e.concurrency,
     pathContainsExclusions: JSON.parse(
@@ -54,6 +57,9 @@ export function runtimeToEntity(r: RuntimeSettings): SettingEntity {
   e.deepSeekApiKey = r.deepSeekApiKey;
   e.openRouterModel = r.openRouterModel;
   e.deepSeekModel = r.deepSeekModel;
+  e.opencodeGoApiKeyEncrypted = r.opencodeGoApiKey ?? null;
+  e.opencodeGoModel = r.opencodeGoModel ?? 'glm-5.2';
+  e.defaultProvider = r.defaultProvider ?? 'openrouter';
   e.scanCacheTtlMinutes = r.scanCacheTtlMinutes;
   e.concurrency = r.concurrency;
   e.pathContainsExclusionsJson = JSON.stringify(r.pathContainsExclusions);

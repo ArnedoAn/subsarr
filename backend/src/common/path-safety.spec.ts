@@ -1,4 +1,5 @@
 import { promises as fs } from 'node:fs';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { assertWithinMediaRoots, validateLanguageCode } from './path-safety';
@@ -46,6 +47,21 @@ describe('media path safety', () => {
         allowMissing: true,
       }),
     ).rejects.toThrow('outside');
+  });
+
+  it('matches healthy roots even when another mount is unavailable', async () => {
+    await expect(
+      assertWithinMediaRoots(root, [path.join(temporary, 'unmounted'), root]),
+    ).resolves.toBe(await fs.realpath(root));
+    await expect(
+      assertWithinMediaRoots(path.join(temporary, 'media-other'), [
+        path.join(temporary, 'unmounted'),
+        root,
+      ]),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(
+      assertWithinMediaRoots(path.join(temporary, 'unmounted'), [root]),
+    ).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('requires explicitly allowed missing paths', async () => {

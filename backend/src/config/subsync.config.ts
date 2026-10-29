@@ -1,10 +1,15 @@
 import { registerAs } from '@nestjs/config';
 import * as path from 'node:path';
 import { validateLanguageCode } from '../common/path-safety';
+import { validateProviderModel } from '../common/translation-provider';
+import type { TranslationProvider } from '../contracts/providers';
 
 export interface SubsyncEnvConfig {
   openRouterApiKey: string;
   deepSeekApiKey: string;
+  opencodeGoApiKey: string;
+  opencodeGoModel: string;
+  defaultProvider: TranslationProvider;
   mediaDirs: string[];
   scanCacheTtlMinutes: number;
   sourceLanguage: string;
@@ -17,6 +22,7 @@ export interface SubsyncEnvConfig {
   pathExclusions: string[];
   fileTooLargeBytes?: number;
   probeConcurrency: number;
+  watchEnabled: boolean;
 }
 
 export const subsyncConfig = registerAs('subsync', (): SubsyncEnvConfig => {
@@ -93,9 +99,29 @@ export const subsyncConfig = registerAs('subsync', (): SubsyncEnvConfig => {
         'SUBSARR_SECRET_KEY must encode exactly 32 bytes as hex or base64',
       );
   }
+  const defaultProvider = process.env.SUBSYNC_DEFAULT_PROVIDER ?? 'openrouter';
+  if (
+    defaultProvider !== 'openrouter' &&
+    defaultProvider !== 'deepseek' &&
+    defaultProvider !== 'opencode-go'
+  )
+    throw new Error(
+      'SUBSYNC_DEFAULT_PROVIDER must be openrouter, deepseek or opencode-go',
+    );
+  const opencodeGoModel = process.env.OPENCODE_GO_MODEL ?? 'glm-5.2';
+  validateProviderModel('opencode-go', opencodeGoModel);
+  const opencodeGoApiKey = process.env.OPENCODE_GO_API_KEY ?? '';
+  if (opencodeGoApiKey.length > 4096 || /[\r\n\0]/.test(opencodeGoApiKey))
+    throw new Error('OPENCODE_GO_API_KEY is invalid or too large');
+  const watchEnabled = process.env.SUBSYNC_WATCH_ENABLED ?? 'false';
+  if (watchEnabled !== 'true' && watchEnabled !== 'false')
+    throw new Error('SUBSYNC_WATCH_ENABLED must be true or false');
   return {
     openRouterApiKey: process.env.OPENROUTER_API_KEY ?? '',
     deepSeekApiKey: process.env.DEEPSEEK_API_KEY ?? '',
+    opencodeGoApiKey,
+    opencodeGoModel,
+    defaultProvider,
     mediaDirs,
     scanCacheTtlMinutes: integer(
       'SUBSYNC_SCAN_CACHE_TTL_MINUTES',
@@ -118,6 +144,7 @@ export const subsyncConfig = registerAs('subsync', (): SubsyncEnvConfig => {
     fileTooLargeBytes: process.env.SUBSYNC_FILE_TOO_LARGE_BYTES
       ? integer('SUBSYNC_FILE_TOO_LARGE_BYTES', 1, 1, Number.MAX_SAFE_INTEGER)
       : undefined,
+    watchEnabled: watchEnabled === 'true',
     probeConcurrency: integer('SUBSYNC_PROBE_CONCURRENCY', 10, 1, 32),
   };
 });

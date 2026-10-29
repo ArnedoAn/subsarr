@@ -1,3 +1,5 @@
+import type { TranslationProvider } from '../contracts/providers';
+
 export interface TranslationProfile {
   id: string;
   name: string;
@@ -5,7 +7,8 @@ export interface TranslationProfile {
   pathPrefix: string;
   sourceLanguage: string;
   targetLanguage: string;
-  provider?: 'openrouter' | 'deepseek';
+  provider?: TranslationProvider;
+  model?: string;
 }
 
 export interface ProfilesFile {

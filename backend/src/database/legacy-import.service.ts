@@ -120,6 +120,12 @@ export class LegacyImportService implements OnModuleInit {
         ).toLowerCase(),
         openRouterApiKey: parsed.openRouterApiKey ?? config.openRouterApiKey,
         deepSeekApiKey: parsed.deepSeekApiKey ?? config.deepSeekApiKey,
+        opencodeGoApiKey:
+          parsed.opencodeGoApiKey ?? config.opencodeGoApiKey ?? '',
+        opencodeGoModel:
+          parsed.opencodeGoModel ?? config.opencodeGoModel ?? 'glm-5.2',
+        defaultProvider:
+          parsed.defaultProvider ?? config.defaultProvider ?? 'openrouter',
         scanCacheTtlMinutes:
           parsed.scanCacheTtlMinutes ?? config.scanCacheTtlMinutes,
         concurrency: parsed.concurrency ?? config.concurrency,

@@ -37,18 +37,31 @@ export async function assertWithinMediaRoots(
   if (
     typeof candidate !== 'string' ||
     !candidate ||
+    candidate.length > 4096 ||
     candidate.includes('\0') ||
     !path.isAbsolute(candidate)
   ) {
     throw new BadRequestException('An absolute local media path is required');
   }
-  const resolved = await resolveExisting(
-    path.resolve(candidate),
-    options.allowMissing === true,
+  let resolved: string;
+  try {
+    resolved = await resolveExisting(
+      path.resolve(candidate),
+      options.allowMissing === true,
+    );
+  } catch (error) {
+    if (error instanceof BadRequestException) throw error;
+    throw new BadRequestException('Media path is unavailable or inaccessible');
+  }
+  // A failed mount must not prevent access through another healthy root.
+  const resolvedRoots = await Promise.allSettled(
+    roots
+      .filter((root) => path.isAbsolute(root))
+      .map((root) => fs.realpath(root)),
   );
-  for (const root of roots) {
-    if (!path.isAbsolute(root)) continue;
-    const realRoot = await fs.realpath(root);
+  for (const root of resolvedRoots) {
+    if (root.status !== 'fulfilled') continue;
+    const realRoot = root.value;
     const relative = path.relative(realRoot, resolved);
     // Node's win32 relative comparison handles drive letters and case correctly.
     if (

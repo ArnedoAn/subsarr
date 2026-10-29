@@ -10,9 +10,12 @@ import {
   IsString,
   Max,
   Min,
+  Matches,
+  MaxLength,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import type { TranslationProvider } from '../../contracts/providers';
 
 export class BatchItemDto {
   @IsString()
@@ -63,8 +66,27 @@ export class CreateBatchJobsDto {
   allowBudgetOverride?: boolean;
 
   @IsOptional()
-  @IsIn(['openrouter', 'deepseek'])
-  provider?: 'openrouter' | 'deepseek';
+  @IsIn(['openrouter', 'deepseek', 'opencode-go'])
+  provider?: TranslationProvider;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  @Matches(/^[a-zA-Z0-9][a-zA-Z0-9._:/+@-]*$/)
+  model?: string;
+
+  @IsOptional()
+  @IsIn(['fast', 'balanced', 'review'])
+  qualityMode?: 'fast' | 'balanced' | 'review';
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(12000)
+  contextHint?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  useTranslationMemory?: boolean;
 
   @IsOptional()
   @IsIn(['replace', 'alternate'])

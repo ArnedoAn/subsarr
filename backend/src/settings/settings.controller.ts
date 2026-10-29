@@ -52,6 +52,11 @@ export class SettingsController {
     return this.settingsService.fetchAvailableModels();
   }
 
+  @Get('opencode-go/models')
+  async openCodeGoModels() {
+    return this.settingsService.fetchOpenCodeGoModels();
+  }
+
   @Put()
   async updateSettings(@Body() dto: UpdateSettingsDto) {
     const res = await this.settingsService.updateSettings(dto);

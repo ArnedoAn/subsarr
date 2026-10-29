@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
 import {
+  IsISO8601,
   IsInt,
   IsOptional,
   IsString,
@@ -23,6 +24,13 @@ export class JobsQueryDto {
     /^(waiting|paused|delayed|active|cancelling|cancelled|completed|failed)(,(waiting|paused|delayed|active|cancelling|cancelled|completed|failed))*$/,
   )
   state?: string;
+  /** Inclusive lower bound on finished/processed/created time. */
+  @IsOptional()
+  @IsISO8601()
+  from?: string;
+  @IsOptional()
+  @IsISO8601()
+  to?: string;
   @IsOptional()
   @Type(() => Number)
   @IsInt()

@@ -10,6 +10,7 @@ import { ItemDetail } from '@/components/library/item-detail';
 import { BatchQueueModal } from '@/components/batch-queue-modal';
 import { Dialog } from '@/components/ui/dialog';
 import { LibraryFilters } from '@/components/library/library-filters';
+import { ScanHistoryPanel } from '@/components/library/scan-history-panel';
 
 export default function LibraryPage() {
   const library = useLibrary();
@@ -57,7 +58,7 @@ export default function LibraryPage() {
     if (!track) { setDetailId(item.id); setNotice('No source track matches saved defaults. Choose a source in details.'); return; }
     setBusy(true); setActionError(null);
     try {
-      await apiPost('/jobs', { mediaItemId: item.id, mediaItemPath: item.path, sourceTrackIndex: track.index, sourceLanguage: settings.sourceLanguage, targetLanguage: settings.targetLanguage, provider: 'openrouter', triggeredBy: 'manual', allowBudgetOverride });
+      await apiPost('/jobs', { mediaItemId: item.id, mediaItemPath: item.path, sourceTrackIndex: track.index, sourceLanguage: settings.sourceLanguage, targetLanguage: settings.targetLanguage, provider: settings.defaultProvider, triggeredBy: 'manual', allowBudgetOverride });
       setBudgetItem(null); setNotice(`Queued ${item.name}`);
     } catch (reason) {
       if (reason instanceof ApiError && reason.status === 409 && reason.code === 'TRANSLATION_BUDGET_EXCEEDED') setBudgetItem(item);
@@ -67,6 +68,7 @@ export default function LibraryPage() {
   return <section className="min-w-0 w-full max-w-full space-y-5">
     <header className="flex flex-wrap items-center justify-between gap-3"><div><h1 className="text-2xl font-bold">Library</h1><p className="text-sm text-on-surface-variant">Search the complete inventory, then translate a file, season, show or explicit selection.</p></div><button className="btn btn-secondary" onClick={library.refresh}>Refresh</button></header>
     <ScanPanel onCompleted={library.refresh} />
+    <ScanHistoryPanel />
     {settingsError && <p role="alert" className="text-warning">Saved defaults unavailable: {settingsError}. Individual detail options remain available.</p>}
     {(actionError || notice) && <div role={actionError ? 'alert' : 'status'} className={actionError ? 'text-error' : 'text-primary'}>{actionError ?? notice}</div>}
     <LibraryFilters library={library} />
@@ -78,7 +80,7 @@ export default function LibraryPage() {
     {library.loading ? <p role="status" className="p-6">Loading matching inventory…</p> : !library.error && page?.total === 0 ? <section className="p-8 text-center"><h2>No matching inventory records</h2><p>Change your search or filters. A running or failed scan can mean discovery is incomplete; this does not prove your media folders are empty. See scan status above.</p></section> : null}
     {page && !library.loading && !library.error && <><LibraryResults items={page.items} selected={selected} onToggle={toggle} onDetails={setDetailId} onTranslate={item => void quickTranslate(item)} targetLanguage={filters.targetLanguage} busy={busy} /><div className="flex flex-wrap items-center justify-between gap-3"><p>{page.total ? page.offset + 1 : 0}–{page.offset + page.items.length} of {page.total} matches</p><div className="flex items-center gap-3"><button className="btn btn-secondary" disabled={filters.page === 1} onClick={() => update({ page: filters.page - 1 })}>Previous</button><span>Page {filters.page} of {Math.max(1, Math.ceil(page.total / filters.limit))}</span><button className="btn btn-secondary" disabled={page.offset + page.items.length >= page.total} onClick={() => update({ page: filters.page + 1 })}>Next</button></div></div></>}
     <Dialog open={detailId !== null} onClose={() => setDetailId(null)} title="Media details" className="!fixed !inset-0 !m-0 !h-dvh !max-h-dvh !w-screen !max-w-none !rounded-none md:!inset-y-0 md:!left-auto md:!right-0 md:!w-[min(90vw,64rem)]"><div>{detailId && <ItemDetail key={detailId} id={detailId} />}</div></Dialog>
-    {batch && settings && <BatchQueueModal open onClose={() => setBatch(null)} itemIds={batch.ids} items={page?.items} scopeLabel={batch.label} initialSource={settings.sourceLanguage} initialTarget={settings.targetLanguage} initialProvider="openrouter" onEnqueued={summary => { setNotice(`${summary.queued} queued; ${summary.failed} not confirmed queued`); }} />}
+    {batch && settings && <BatchQueueModal open onClose={() => setBatch(null)} itemIds={batch.ids} items={page?.items} scopeLabel={batch.label} initialSource={settings.sourceLanguage} initialTarget={settings.targetLanguage} initialProvider={settings.defaultProvider} onEnqueued={summary => { setNotice(`${summary.queued} queued; ${summary.failed} not confirmed queued`); }} />}
     <Dialog open={budgetItem !== null} onClose={() => setBudgetItem(null)} title="Monthly budget reached"><p>Approve a manual budget override to translate {budgetItem?.name}?</p><div className="flex gap-3 mt-4"><button className="btn btn-secondary" onClick={() => setBudgetItem(null)}>Cancel</button><button className="btn btn-primary" disabled={busy} onClick={() => { if (budgetItem) void quickTranslate(budgetItem, true); }}>Approve override and queue</button></div></Dialog>
   </section>;
 }
