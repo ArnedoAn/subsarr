@@ -11,6 +11,7 @@ const sources = [
   'backend/src/system/system.types.ts',
   'backend/src/translation-workspace/workspace.types.ts',
   'backend/src/translation-workspace/review.types.ts',
+  'backend/src/subtitle-sync/subtitle-sync.types.ts',
 ];
 const sourceSet = new Set(sources.map((source) => path.join(root, source)));
 const TYPE_IMPORT = /^import\s+type\s+\{[^}]*\}\s+from\s+'([^']+)';\r?\n/gm;

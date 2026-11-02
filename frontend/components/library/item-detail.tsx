@@ -17,6 +17,7 @@ import { useToast } from '@/components/ui/toast';
 import { ProviderModelPicker, useTranslationSelection } from '@/components/provider-model-picker';
 import { INITIAL_QUALITY, TranslationQualityOptions } from '@/components/translation-quality-options';
 import { TranslationResultSummary } from '@/components/translation-result-summary';
+import { SubtitleSyncPanel } from '@/components/library/subtitle-sync-panel';
 
 interface ItemDetail extends MediaItem { rules: RuleEvaluation[]; }
 
@@ -406,6 +407,8 @@ export function ItemDetail({ id }: { id: string }) {
               </ul>
             </div>
           )}
+
+          <SubtitleSyncPanel item={item} onCompleted={refetchHistory} />
         </div>
 
         {/* RIGHT: Translation Controls */}

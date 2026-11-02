@@ -194,6 +194,38 @@ con el mismo `scanId`. No extrapolar una prueba pequeña a toda la biblioteca.
   `/library/scans/:id/export` (solo nombres de archivo salvo `?redact=false`) y
   `GET /library/watch-status`.
 
+## Sincronización de subtítulos
+
+Para subtítulos de otra release (otro corte, fps, intro/recap distinto) que no
+coinciden con el video local. Motor: [ffsubsync](https://github.com/smacke/ffsubsync)
+(MIT) vía su API de librería; no se reimplementa la alineación.
+
+- Referencia `auto`: primera pista embebida de texto completa (SRT/ASS/VTT/mov_text;
+  se omiten PGS/VobSub y títulos `forced`/`signs`/`songs`/`commentary`), en
+  cualquier idioma: la alineación subtítulo-subtítulo tarda ~1 s y es la más precisa.
+  Sin pista útil, voz del audio (WebRTC VAD, 20–60 s por película). `audio` y
+  `track` fuerzan una u otra.
+- Corrige desfase constante y deriva por fps (p. ej. 25 vs 23.976). `allowSplits`
+  activa la alineación por tramos estilo alass para cortes intermedios (anuncios,
+  director's cut). `maxOffsetSeconds` (5–900, 60 por defecto) limita el desfase.
+- Con `--skip-sync-on-low-quality`, una alineación poco fiable falla sin escribir
+  nada en vez de publicar un subtítulo probablemente peor.
+- Salida junto al video como `<video>.<lang>[.forced].<ext>` con la misma
+  publicación atómica que las traducciones. Si existe: `conflict=fail` (defecto),
+  `replace` (guarda la versión anterior en el historial) o `alternate` (`.lang.2`).
+- Una sincronización a la vez, hasta 20 en espera, timeout 20 min, tareas en
+  memoria durante 1 h (no sobreviven reinicios). Entrada máx. 8 MB.
+- `SUBSYNC_SYNC_PYTHON`: intérprete con ffsubsync (`python3` por defecto; la imagen
+  Docker usa `/opt/ffsubsync/bin/python`). Fuera de Docker: `pip install ffsubsync`.
+
+HTTP:
+
+- `POST /subtitle-sync` multipart: `mediaItemId`, `file` o `sidecarPath` (un sidecar
+  listado del item), `language`, `forced`, `reference`, `referenceTrackIndex`,
+  `allowSplits`, `maxOffsetSeconds`, `conflict`. Devuelve la tarea en cola.
+- `GET /subtitle-sync?mediaItemId=`, `GET /subtitle-sync/:id`,
+  `POST /subtitle-sync/:id/cancel`.
+
 ## Traducción y presupuesto
 
 SRT, ASS/SSA y WebVTT comparten parser/documento y motor. Se preservan tiempos,

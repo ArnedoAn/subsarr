@@ -11,10 +11,18 @@ RUN pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm run build
 
+# ffsubsync powers subtitle synchronization; build-base covers wheels missing for the arch.
+FROM node:24-alpine AS ffsubsync
+RUN apk add --no-cache python3 python3-dev build-base \
+  && python3 -m venv /opt/ffsubsync \
+  && /opt/ffsubsync/bin/pip install --no-cache-dir ffsubsync==0.5.1
+
 FROM node:24-alpine AS runner
 WORKDIR /app
 
-RUN apk add --no-cache ffmpeg su-exec
+RUN apk add --no-cache ffmpeg su-exec python3
+COPY --from=ffsubsync /opt/ffsubsync /opt/ffsubsync
+ENV SUBSYNC_SYNC_PYTHON=/opt/ffsubsync/bin/python
 
 ENV NODE_ENV=production
 ENV PNPM_HOME="/pnpm"

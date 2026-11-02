@@ -23,6 +23,8 @@ export interface SubsyncEnvConfig {
   fileTooLargeBytes?: number;
   probeConcurrency: number;
   watchEnabled: boolean;
+  /** Python interpreter with ffsubsync installed, used by subtitle synchronization. */
+  syncPython: string;
 }
 
 export const subsyncConfig = registerAs('subsync', (): SubsyncEnvConfig => {
@@ -116,6 +118,11 @@ export const subsyncConfig = registerAs('subsync', (): SubsyncEnvConfig => {
   const watchEnabled = process.env.SUBSYNC_WATCH_ENABLED ?? 'false';
   if (watchEnabled !== 'true' && watchEnabled !== 'false')
     throw new Error('SUBSYNC_WATCH_ENABLED must be true or false');
+  const syncPython =
+    process.env.SUBSYNC_SYNC_PYTHON?.trim() ||
+    (process.platform === 'win32' ? 'python' : 'python3');
+  if (syncPython.length > 4096 || /[\r\n\0]/.test(syncPython))
+    throw new Error('SUBSYNC_SYNC_PYTHON is invalid or too large');
   return {
     openRouterApiKey: process.env.OPENROUTER_API_KEY ?? '',
     deepSeekApiKey: process.env.DEEPSEEK_API_KEY ?? '',
@@ -145,6 +152,7 @@ export const subsyncConfig = registerAs('subsync', (): SubsyncEnvConfig => {
       ? integer('SUBSYNC_FILE_TOO_LARGE_BYTES', 1, 1, Number.MAX_SAFE_INTEGER)
       : undefined,
     watchEnabled: watchEnabled === 'true',
+    syncPython,
     probeConcurrency: integer('SUBSYNC_PROBE_CONCURRENCY', 10, 1, 32),
   };
 });

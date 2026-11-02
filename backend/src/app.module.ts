@@ -22,6 +22,7 @@ import { RenameModule } from './rename/rename.module';
 import { QuickTranslateModule } from './quick-translate/quick-translate.module';
 import { EvaluationModule } from './evaluation/evaluation.module';
 import { WorkspaceModule } from './translation-workspace/workspace.module';
+import { SubtitleSyncModule } from './subtitle-sync/subtitle-sync.module';
 
 @Module({
   imports: [
@@ -69,6 +70,7 @@ import { WorkspaceModule } from './translation-workspace/workspace.module';
     QuickTranslateModule,
     EvaluationModule,
     WorkspaceModule,
+    SubtitleSyncModule,
   ],
   controllers: [AppController],
   providers: [AppService],
